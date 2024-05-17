@@ -60,8 +60,9 @@ class ContiguousSupersetTrie:
                         if not self.superset_map[substring]:
                             del self.superset_map[substring]
 
-    def has_superset(self, bstring):
-        return bstring in self.superset_map and len(self.superset_map[bstring]) > 0
+    def get_supersets(self, bstring):
+        # Return the set of supersets if they exist, otherwise return an empty set
+        return self.superset_map.get(bstring, set())
 
 class LengthTokenizer(RegexTokenizer):
 
@@ -144,13 +145,16 @@ class LengthTokenizer(RegexTokenizer):
             # vocab.update({key: 0 for key, value in s[dropn:]})
             #remove dropn of tokens, from those that have no supertoken in vocan
             for i, t in enumerate(s):
-                if cs_trie.has_superset(t[0]) or len(t[0]) == 1:
+                if cs_trie.superset_map.get(t[0]) or len(t[0]) == 1:
                     continue
                 del vocab[t[0]]
                 cs_trie.delete(t[0])
                 dropn -= 1
                 if dropn == 0:
                     break
+
+            for k in vocab:
+                vocab[k] = 0
 
 
 
