@@ -53,18 +53,15 @@ class LengthTokenizer(RegexTokenizer):
         ids = [ch.encode("utf-8") for ch in text_chunks]
 
         # create a vocabulary dictionary, the key is the token bytes, the value is the number of times it appears the text-chunks tokenizatoin
-        vocab = defaultdict(int)
-        #add single bytes
-        vocab.update({bytes([idx]):0 for idx in range(256)}) # int -> bytes
+        #vocab = defaultdict(int)
+        #first add all single bytes
+        vocab = {bytes([idx]):0  for idx in range(256)} # int -> bytes
 
         #add each chunk and all its sublists to vocab
         for chunk in ids:
-            sublists = [chunk]
             for start in range(len(chunk)):
                 for end in range(start + 1, len(chunk) + 1):
-                    sublists.append(chunk[start:end])
-            for sublist in sublists:
-                vocab[sublist] = 0
+                    vocab[chunk[start:end]] = 0
 
         while len(vocab) > vocab_size:
             for chunk in ids:
@@ -72,13 +69,14 @@ class LengthTokenizer(RegexTokenizer):
                     vocab[token] += 1
 
             # take the tokens longer than 1 byte, and sort them by frequency * length, and then by length
-            s = sorted(list(vocab.items())[256:], key=lambda item: (item[1]*len(item[0]), -len(item[0])))
+            # 1-byte tokens are put at the end
+            s = sorted(list(vocab.items()), key=lambda item: (item[1]*len(item[0]) if len(item[0]) > 1 else float("inf"), -len(item[0])))
             # drop half of rare tokens (or the remaining 10)
             dropn = len(vocab) - vocab_size
-            dropn = dropn if dropn <= 10 else dropn // 3
+            dropn = dropn if dropn <= 10 else dropn // 2
             #rebuild vocab from all 1 bytes, and the not-dropped tokens
             vocab = defaultdict(int)
-            vocab.update({bytes([idx]):0 for idx in range(256)} | {key: 0 for key, value in s[dropn:]})
+            vocab.update({key: 0 for key, value in s[dropn:]})
 
         #vocab of id:token, and vocab_rev of token:id
         self.vocab = {i:key for i, (key, value) in enumerate(vocab.items())}

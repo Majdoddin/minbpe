@@ -3,3 +3,4 @@ from .basic import BasicTokenizer
 from .regex import RegexTokenizer
 from .gpt4 import GPT4Tokenizer
 from .length import LengthTokenizer
+from .length_2 import LengthTokenizer2
