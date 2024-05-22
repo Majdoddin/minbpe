@@ -2,6 +2,7 @@ import regex as re
 from collections import defaultdict
 from .base import Tokenizer, get_stats, merge
 from .regex import RegexTokenizer, GPT2_SPLIT_PATTERN, GPT4_SPLIT_PATTERN
+from functools import reduce
 
 class TrieNode:
     def __init__(self):
@@ -114,52 +115,85 @@ class LengthTokenizer(RegexTokenizer):
         ids = [ch.encode("utf-8") for ch in text_chunks]
 
         # create a vocabulary dictionary, the key is the token bytes, the value is the number of times it appears the text-chunks tokenizatoin
-        #vocab = defaultdict(int)
-        #first add all single bytes
-        vocab = {bytes([idx]):0  for idx in range(256)} # int -> bytes
+        alltoks = defaultdict(int)
+        alltoks.update({bytes([idx]):0  for idx in range(256)})
 
         #add each chunk and all its sublists to vocab
-        for chunk in ids:
-            for start in range(len(chunk)):
-                for end in range(start + 1, len(chunk) + 1):
-                    vocab[chunk[start:end]] = 0
+        for i, chunkid in enumerate(ids):
+            for start in range(len(chunkid)):
+                for end in range(start + 1, len(chunkid) + 1):
+                    alltoks[chunkid[start:end]] += 1
 
-        cs_trie = ContiguousSupersetTrie()
-        for t in vocab:
-            cs_trie.insert(t)
+        #pruning any token that has same freq as one of its supertoken
+        toremove = set()
+        for token in alltoks:
+            for start in range(len(token)):
+                for end in range(start + 1, len(token) + 1):
+                    if token[start:end] != token and alltoks[token[start:end]] == alltoks[token]:
+                        toremove.add(token[start:end])
+        #pruning tokens that have small frequency
+        for token in alltoks:
+            if alltoks[token] <= 25:
+                toremove.add(token)
 
-        while len(vocab) > vocab_size:
-            for chunk in ids:
-                for token in self._encode_chunk(chunk, vocab):
-                    assert token in vocab
-                    vocab[token] += 1
+        for token in toremove:
+            if len(token) > 1:
+                del alltoks[token]
 
-            # take the tokens longer than 1 byte, and sort them by frequency * length, and then by length
-            # 1-byte tokens are put at the end
-            s = sorted(list(vocab.items()), key=lambda item: (item[1]*len(item[0]) if len(item[0]) > 1 else float("inf"), -len(item[0])))
-            # drop half of rare tokens (or the remaining 10)
-            dropn = len(vocab) - vocab_size
-            dropn = dropn if dropn <= 10 else dropn // 2
-            #rebuild vocab from all 1 bytes, and the not-dropped tokens
-            # vocab = defaultdict(int)
-            # vocab.update({key: 0 for key, value in s[dropn:]})
-            #remove dropn of tokens, from those that have no supertoken in vocan
-            for i, t in enumerate(s):
-                if cs_trie.superset_map.get(t[0]) or len(t[0]) == 1:
-                    continue
-                del vocab[t[0]]
-                cs_trie.delete(t[0])
-                dropn -= 1
-                if dropn == 0:
-                    break
+        #auxillary data structures for efficiency. because some chunks can be identical, we identify a chunk by its idx index
+        supchunks = defaultdict(set)
+        subtkns = defaultdict(set)
+        #add each chunk and all its sublists to vocab
+        for i, chunkid in enumerate(ids):
+            for start in range(len(chunkid)):
+                for end in range(start + 1, len(chunkid) + 1):
+                    if chunkid[start:end] not in alltoks:
+                        continue
+                    supchunks[chunkid[start:end]].add(i)
+                    subtkns[i].add(chunkid[start:end])
+        #we do not need the frequencies anymore
+        alltoks = set(alltoks.keys())
+        #initialize vocab bei all single byte tokens
+        vocab = set(bytes([idx])  for idx in range(256)) # int -> bytes
 
-            for k in vocab:
-                vocab[k] = 0
+        best = None
+        #utils holds sum of utilitis of a token, over all chuncks with that token
+        utility, utils = defaultdict(int), defaultdict(int)
+        #add the token with most reduction in size of tokenization
+        while len(vocab) < vocab_size:
+            #find those tokens that share a chunk with best (from prev iteration)
+            affected_chunks = supchunks[best] if best else set(range(len(ids)))
+            affected_tokens = (reduce(set.union, [subtkns[chunk] for chunk in affected_chunks]) if best else alltoks) - vocab
+            #update length of minimal tokenizations of each chunk, according to the current vocab
+            for chunkid in affected_chunks:
+                utils[(None, chunkid)] = len(self._encode_chunk(ids[chunkid], vocab))
+            for token in affected_tokens:
+                #sum the improvements on minimal tokenizations, if token is added to vocab. improvements can happen only in affected_chunks
+                vocab.add(token)
+                for chunkid in (supchunks[token] & affected_chunks):
+                    utility[token] -= utils[(token, chunkid)]
+                    utils[(token, chunkid)] = (utils[(None, chunkid)] - len(self._encode_chunk(ids[chunkid], vocab)))
+                    utility[token] += utils[(token, chunkid)]
+                vocab.remove(token)
 
-
-
-
+            best = max(utility, key=utility.get)
+            print(utility[best])
+            utility.pop(best)
+            vocab.add(best)
 
         #vocab of id:token, and vocab_rev of token:id
-        self.vocab = {i:key for i, (key, value) in enumerate(vocab.items())}
-        self.vocab_rev = {key:i for i, (key, value) in enumerate(vocab.items())}
+        self.vocab = {i:token for i, token in enumerate(vocab)}
+        self.vocab_rev = {token:i for i, token in enumerate(vocab)}
+
+    #     for token in vocab:
+    #         if len(token) == 1:
+    #             continue
+    #         vocab = vocab.remove(token)
+    #         for chunkid in supchunks[token]:
+    #             utility[token] += (for token in vocab:
+    # if len(token) == 1:
+    #     continue
+    # vocab = vocab.remove(token)
+    # for chunkid in supchunks[token]:
+
+    #     utility[token] += (len(self._encode_chunk(ids[chunkid], vocab))) - len(self._encode_chunk(ids[chunkid], vocab | set(token))))
