@@ -156,18 +156,26 @@ class LengthTokenizer(RegexTokenizer):
         #initialize vocab bei all single byte tokens
         vocab = set(bytes([idx])  for idx in range(256)) # int -> bytes
 
-        best = None
+        change, added = None, None
         #utils holds sum of utilitis of a token, over all chuncks with that token
         utility, utils = defaultdict(int), defaultdict(int)
         #add the token with most reduction in size of tokenization
         while len(vocab) < vocab_size:
-            #find those tokens that share a chunk with best (from prev iteration)
-            affected_chunks = supchunks[best] if best else set(range(len(ids)))
-            affected_tokens = (reduce(set.union, [subtkns[chunk] for chunk in affected_chunks]) if best else alltoks) - vocab
+            #find those tokens that share a chunk with change (from prev iteration)
+            affected_chunks = supchunks[change] if change else set(range(len(ids)))
+            affected_tokens = (reduce(set.union, [subtkns[chunk] for chunk in affected_chunks]) if change else alltoks) - set(bytes([idx])  for idx in range(256))#- vocab
             #update length of minimal tokenizations of each chunk, according to the current vocab
             for chunkid in affected_chunks:
                 utils[(None, chunkid)] = len(self._encode_chunk(ids[chunkid], vocab))
-            for token in affected_tokens:
+            for token in (affected_tokens & vocab):
+                vocab.remove(token)
+                for chunkid in (supchunks[token] & affected_chunks):
+                    utility[token] -= utils[(token, chunkid)]
+                    utils[(token, chunkid)] = (len(self._encode_chunk(ids[chunkid], vocab)) - utils[(None, chunkid)])
+                    utility[token] += utils[(token, chunkid)]
+                vocab.add(token)
+
+            for token in (affected_tokens - vocab):
                 #sum the improvements on minimal tokenizations, if token is added to vocab. improvements can happen only in affected_chunks
                 vocab.add(token)
                 for chunkid in (supchunks[token] & affected_chunks):
@@ -176,24 +184,26 @@ class LengthTokenizer(RegexTokenizer):
                     utility[token] += utils[(token, chunkid)]
                 vocab.remove(token)
 
-            best = max(utility, key=utility.get)
-            print(utility[best])
-            utility.pop(best)
-            vocab.add(best)
+
+            #TODO: remove a token only if its utility has reduced since it was inserted.
+            worst = None
+            for token in vocab - set(bytes([idx])  for idx in range(256)):
+                if utility[token] < utility[added] and not (supchunks[added] & supchunks[token]):
+                    if worst and utility[token] > utility[worst]:
+                        continue
+                    worst = token
+            if worst:
+                vocab.remove(worst)
+                change = worst
+                print(f"removed {change} utility:{utility[change]}")
+            else:
+                added = max((token for token in utility if token not in vocab), key=utility.get)
+                change = added
+                vocab.add(change)
+                print(f"added {change} utility:{utility[change]}")
 
         #vocab of id:token, and vocab_rev of token:id
         self.vocab = {i:token for i, token in enumerate(vocab)}
         self.vocab_rev = {token:i for i, token in enumerate(vocab)}
 
-    #     for token in vocab:
-    #         if len(token) == 1:
-    #             continue
-    #         vocab = vocab.remove(token)
-    #         for chunkid in supchunks[token]:
-    #             utility[token] += (for token in vocab:
-    # if len(token) == 1:
-    #     continue
-    # vocab = vocab.remove(token)
-    # for chunkid in supchunks[token]:
 
-    #     utility[token] += (len(self._encode_chunk(ids[chunkid], vocab))) - len(self._encode_chunk(ids[chunkid], vocab | set(token))))
