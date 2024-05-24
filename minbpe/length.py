@@ -66,45 +66,61 @@ class ContiguousSupersetTrie:
         return self.superset_map.get(bstring, set())
 
 class LengthTokenizer(RegexTokenizer):
-
     def _encode_chunk(self, text_bytes, vocab=None):
         #called in training?
         voc = vocab if vocab else self.vocab_rev
 
         n = len(text_bytes)
-        dp = [[float('inf')] * n for _ in range(n)]
+        dp = [float("inf") for _ in range(n)]
         backtrack = [[-1] * n for _ in range(n)]
 
         # Check for single words in the vocabulary
-        for i in range(n):
-            for j in range(i, n):
-                if text_bytes[i:j+1] in voc:
-                    dp[i][j] = 1
+        # for i in range(n):
+        #     for j in range(i, n):
+        #         if text_bytes[i:j+1] in voc:
+        #             dp[i][j] = 1
 
         # Compute the dp values
-        for length in range(2, n + 1):  # length of the substring
-            for i in range(n - length + 1):
-                j = i + length - 1
-                if dp[i][j] == 1:  # If the whole substring is a word, skip further processing
-                    continue
-                for k in range(i, j):
-                    if dp[i][j] > dp[i][k] + dp[k+1][j]:
-                        dp[i][j] = dp[i][k] + dp[k+1][j]
-                        backtrack[i][j] = k
+        # for length in range(2, n + 1):  # length of the substring
+        #     for i in range(n - length + 1):
+        #         j = i + length - 1
+        #         if dp[i][j] == 1:  # If the whole substring is a word, skip further processing
+        #             continue
+        #         for k in range(i, j):
+        #             if dp[i][j] > dp[i][k] + dp[k+1][j]:
+        #                 dp[i][j] = dp[i][k] + dp[k+1][j]
+        #                 backtrack[i][j] = k
+
+        # Populate the dp table
+        for i in range(0, n):
+            if text_bytes[:i+1] in voc:
+                dp[i] = 1
+                backtrack[i] = 0
+                continue
+            for j in range(1, i+1):
+                # for token in voc:
+                # token_len = len(token)
+                if text_bytes[j:i+1] in voc:
+                    assert dp[j-1] >= 1
+                    if dp[i] > dp[j-1] + 1:
+                        dp[i] = dp[j-1] + 1
+                        backtrack[i] = j
 
         # Reconstruct the tokens from the dp table
-        def reconstruct_tokens(i, j):
-            if i > j:
-                return []
-            if backtrack[i][j] == -1:
-                return [text_bytes[i:j+1]]
-            k = backtrack[i][j]
-            return reconstruct_tokens(i, k) + reconstruct_tokens(k + 1, j)
+        def reconstruct_tokens(i):
+            # if i > j:
+            #     return []
+            if backtrack[i] == 0:
+                return [text_bytes[:i+1]]
+            k = backtrack[i]
+            return reconstruct_tokens(k-1) + [text_bytes[k:i+1]]
 
-        if vocab:
-            return reconstruct_tokens(0, n - 1)
-        else: #called in training, return the ids
-            return [voc[token] for token in reconstruct_tokens(0, n - 1)]
+        if vocab: #called in training, return the ids
+        #    if dp[n-1] != len(self._encode_chunk_old(text_bytes, vocab)):
+        #        xxx = 1
+           return dp[n-1]
+        else:
+            return [voc[token] for token in reconstruct_tokens(n - 1)]
 
     def train(self, text, vocab_size, verbose=False):
         assert vocab_size >= 256
@@ -158,7 +174,7 @@ class LengthTokenizer(RegexTokenizer):
 
         change, added = None, None
         #utils holds sum of utilitis of a token, over all chuncks with that token
-        utility, utils = defaultdict(int), defaultdict(int)
+        utility, utils  = defaultdict(int), defaultdict(int)
         #add the token with most reduction in size of tokenization
         while len(vocab) < vocab_size:
             #find those tokens that share a chunk with change (from prev iteration)
@@ -166,12 +182,12 @@ class LengthTokenizer(RegexTokenizer):
             affected_tokens = (reduce(set.union, [subtkns[chunk] for chunk in affected_chunks]) if change else alltoks) - set(bytes([idx])  for idx in range(256))#- vocab
             #update length of minimal tokenizations of each chunk, according to the current vocab
             for chunkid in affected_chunks:
-                utils[(None, chunkid)] = len(self._encode_chunk(ids[chunkid], vocab))
+                utils[(None, chunkid)] = self._encode_chunk(ids[chunkid], vocab)
             for token in (affected_tokens & vocab):
                 vocab.remove(token)
                 for chunkid in (supchunks[token] & affected_chunks):
                     utility[token] -= utils[(token, chunkid)]
-                    utils[(token, chunkid)] = (len(self._encode_chunk(ids[chunkid], vocab)) - utils[(None, chunkid)])
+                    utils[(token, chunkid)] = self._encode_chunk(ids[chunkid], vocab) - utils[(None, chunkid)]
                     utility[token] += utils[(token, chunkid)]
                 vocab.add(token)
 
@@ -180,7 +196,7 @@ class LengthTokenizer(RegexTokenizer):
                 vocab.add(token)
                 for chunkid in (supchunks[token] & affected_chunks):
                     utility[token] -= utils[(token, chunkid)]
-                    utils[(token, chunkid)] = (utils[(None, chunkid)] - len(self._encode_chunk(ids[chunkid], vocab)))
+                    utils[(token, chunkid)] = (utils[(None, chunkid)] - (self._encode_chunk(ids[chunkid], vocab)))
                     utility[token] += utils[(token, chunkid)]
                 vocab.remove(token)
 
@@ -188,7 +204,7 @@ class LengthTokenizer(RegexTokenizer):
             #TODO: remove a token only if its utility has reduced since it was inserted.
             worst = None
             for token in vocab - set(bytes([idx])  for idx in range(256)):
-                if utility[token] < utility[added] and not (supchunks[added] & supchunks[token]):
+                if (utility[token] < utility[added]) and not (supchunks[added] & supchunks[token]):
                     if worst and utility[token] > utility[worst]:
                         continue
                     worst = token
