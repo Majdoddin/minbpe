@@ -195,7 +195,7 @@ class LengthTokenizer(RegexTokenizer):
 
             #utility of a token can change by mutations.
             #From the tokens in vocab that have less utility than the last added token,
-            #and do not share a chunk with the lass added token (because then utility of last addition depends of the token, and it should not be affected, to avoid add/remove loops)
+            #and do not share a chunk with the lass added token (because then utility of last addition depends of the token, but it should not be affected to remain a valid removal reference point)
             #remove the one with least utility
             worst = None
             for token in vocab - set(bytes([idx])  for idx in range(256)):
