@@ -94,6 +94,7 @@ class RegexTokenizer(Tokenizer):
         # let's begin. first, convert all bytes to integers in range 0..255
         ids = list(text_bytes)
         while len(ids) >= 2:
+            # find the pair with the lowest merge index
             stats = get_stats(ids)
             pair = min(stats, key=lambda p: self.merges.get(p, float("inf")))
             # subtle: if there are no more merges available, the key will
