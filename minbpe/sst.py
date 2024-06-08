@@ -1,0 +1,168 @@
+import regex as re
+from collections import defaultdict
+from .regex import RegexTokenizer
+from functools import reduce
+from mindopt_pulp import MINDOPT
+import pulp
+
+
+class ILPTokenizer(RegexTokenizer):
+    def _encode_chunk(self, text_bytes, vocab=None):
+        # in training vocab != None
+        voc = vocab if vocab else self.vocab_rev
+
+        n = len(text_bytes)
+        dp = [float("inf") for _ in range(n)]
+        backtrack = [[-1] * n for _ in range(n)]
+
+        # at i'th iteration, dp[j] is the size of optimal tokenization of text_bytes[:j+1], for 0 < j < i-1, and
+        # backtrack[j] is the index of the first byte of the last token of an optimal tokenization.
+        for i in range(0, n):
+            if text_bytes[:i+1] in voc:
+                dp[i] = 1
+                backtrack[i] = 0
+                continue
+            for j in range(1, i+1):
+                if text_bytes[j:i+1] in voc:
+                    assert dp[j-1] >= 1
+                    if dp[i] > dp[j-1] + 1:
+                        dp[i] = dp[j-1] + 1
+                        backtrack[i] = j
+
+        # reconstruct the tokens from the backtrack table
+        def reconstruct_tokens(i):
+            if backtrack[i] == 0:
+                return [text_bytes[:i+1]]
+            k = backtrack[i]
+            return reconstruct_tokens(k-1) + [text_bytes[k:i+1]]
+
+        if vocab: # called in training, return the size of optimal tokenization
+           return dp[n-1]
+        else: # return an optimal tokenization
+            return [voc[token] for token in reconstruct_tokens(n - 1)]
+
+    def train(self, text, vocab_size, verbose=False):
+        assert vocab_size >= 256
+        # split the text up into text chunks
+        text_chunks = re.findall(self.compiled_pattern, text)
+
+        # input text preprocessing
+        ids = [ch.encode("utf-8") for ch in text_chunks]
+
+        tmp = defaultdict(int)
+        for byte_str in ids:
+            tmp[byte_str] += 1
+        ids = tmp
+
+        # the key is a token (as bstring), the value is the number of times the token appears in the  tokenizatoin of text-chunks
+        alltoks = defaultdict(int)
+        alltoks.update({bytes([idx]):0  for idx in range(256)})
+
+        # add each chunk and all its sublists to alltoks
+        for chunk in ids:
+            for start in range(len(chunk)):
+                for end in range(start + 1, len(chunk) + 1):
+                    alltoks[chunk[start:end]] += ids[chunk]
+
+        # pruning any token that has same freq as one of its supertokens
+        toremove = set()
+        for token in alltoks:
+            for start in range(len(token)):
+                for end in range(start + 1, len(token) + 1):
+                    if token[start:end] != token and alltoks[token[start:end]] == alltoks[token]:
+                        toremove.add(token[start:end])
+
+        # pruning tokens that have small frequency
+        # The constant is emperical, b'over' occured just 13 times in tokenizaton of talor swirt wiki article
+        if len(alltoks) - len(toremove) > 2000:
+            for token in alltoks:
+                if alltoks[token] <= 3 * max(1, len(text) / 180000):
+                    toremove.add(token)
+
+        for token in toremove:
+            if len(token) > 1:
+                del alltoks[token]
+        # we do not need the values any more
+        alltoks = set(alltoks.keys())
+
+        # Precompute positions where each token can appear in each chunk
+        #get rid of substr
+        P = defaultdict(set)
+        for chunk in ids:
+            for start in range(len(chunk)):
+                for end in range(start + 1, len(chunk) + 1):
+                    if chunk[start:end] in alltoks:
+                        P[(chunk, start)].add(chunk[start:end])
+
+        # Define the problem
+        prob = pulp.LpProblem("TokenizationProblem", pulp.LpMinimize)
+
+        def varname(*args):
+            # convert the tuple to a string with a unique delimiter
+            s = '_'.join(map(str, args))
+            # allowed characters (letters, digits, and underscore)
+            allowed_chars = re.compile(r'[a-zA-Z0-9_]')
+            # escape occurrences of "_x" in the original string
+            s = s.replace('_x', '_xx_')
+
+            result = []
+            for char in s:
+                if allowed_chars.match(char):
+                    result.append(char)
+                else:
+                    # replace invalid character with its Unicode code point in hex
+                    result.append('_x' + format(ord(char), 'x') + '_')
+
+            # join the list into a single string
+            return ''.join(result)
+
+        # Define variables
+        x = pulp.LpVariable.dicts("x", [varname(tok) for tok in alltoks if len(tok) > 1], 0, 1, pulp.LpBinary)
+        y = pulp.LpVariable.dicts("y", (varname(chunk, token, start) for (chunk, start), tokens in P.items() for token in tokens), 0, 1, pulp.LpBinary)
+
+        # Objective function: Minimize the total number of pairs (token, position) used
+        prob += pulp.lpSum(ids[chunk] * y[varname(chunk, token, start)]
+                        for (chunk, start), tokens in P.items()
+                        for token in tokens)
+
+        # Constraint: Exactly (vocab_size - 256) additional tokens must be selected
+        prob += pulp.lpSum(x[varname(token)] for token in alltoks if len(token) > 1) == (vocab_size - 256)
+
+        # Constraint: only selected tokens may be used in tokenization of chunks
+        for (chunk, start), tokens in P.items():
+            for token in tokens:
+                if len(token) > 1:
+                    prob += y[varname(chunk, token, start)] <= x[varname(token)]
+
+        # Constraint: Complete coverage and non-overlapping
+        for chunk in ids:
+            for pos in range(len(chunk)):
+                prob += pulp.lpSum(y[varname(chunk, token, start)]
+                                for start in range(pos + 1)
+                                for token in P[(chunk, start)]
+                                if start + len(token) > pos) == 1
+
+        # Write the problem as an MPS file
+        prob.writeMPS("lo_ex1.mps")
+
+        # Solve the problem using the MINDOPT solver
+        # prob.solve(MINDOPT())  # use default options
+        options = {
+                "Method": -1,
+                "NumThreads": 0,
+                "Presolve": 1,
+                "Dualization": -1,
+                "SPX/MaxIterations": 2147483647,
+                "SPX/ColumnGeneration": -1,
+                "IPM/MaxIterations": 400,
+                "MaxTime": 1.7976931348623158e+308,
+                "SPX/PrimalTolerance": 1.E-6,
+                "SPX/DualTolerance": 1.E-6,
+                "IPM/PrimalTolerance": 1.E-8,
+                "IPM/DualTolerance": 1.E-8,
+                "IPM/GapTolerance": 1.E-8}
+        prob.solve(MINDOPT(options=options))
+
+        self.vocab = sorted([token for token in alltoks if len(token) == 1 or pulp.value(x[varname(token)]) == 1], key=lambda x: (len(x), x))
+        self.vocab = {i:token for i, token in enumerate(self.vocab)}
+        self.vocab_rev = {token:i for i, token in self.vocab.items()}
