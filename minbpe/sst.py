@@ -4,7 +4,8 @@ from .regex import RegexTokenizer
 from functools import reduce
 from mindopt_pulp import MINDOPT
 import pulp
-
+from pulp import PULP_CBC_CMD
+import ast
 
 class ILPTokenizer(RegexTokenizer):
     def _encode_chunk(self, text_bytes, vocab=None):
@@ -147,22 +148,80 @@ class ILPTokenizer(RegexTokenizer):
 
         # Solve the problem using the MINDOPT solver
         # prob.solve(MINDOPT())  # use default options
-        options = {
-                "Method": -1,
-                "NumThreads": 0,
-                "Presolve": 1,
-                "Dualization": -1,
-                "SPX/MaxIterations": 2147483647,
-                "SPX/ColumnGeneration": -1,
-                "IPM/MaxIterations": 400,
-                "MaxTime": 1.7976931348623158e+308,
-                "SPX/PrimalTolerance": 1.E-6,
-                "SPX/DualTolerance": 1.E-6,
-                "IPM/PrimalTolerance": 1.E-8,
-                "IPM/DualTolerance": 1.E-8,
-                "IPM/GapTolerance": 1.E-8}
-        prob.solve(MINDOPT(options=options))
+        # options = {
+        #         "Method": -1,
+        #         "NumThreads": 0,
+        #         "Presolve": 1,
+        #         "Dualization": -1,
+        #         "SPX/MaxIterations": 2147483647,
+        #         "SPX/ColumnGeneration": -1,
+        #         "IPM/MaxIterations": 400,
+        #         "MaxTime": 1.7976931348623158e+308,
+        #         "SPX/PrimalTolerance": 1.E-6,
+        #         "SPX/DualTolerance": 1.E-6,
+        #         "IPM/PrimalTolerance": 1.E-8,
+        #         "IPM/DualTolerance": 1.E-8,
+        #         "IPM/GapTolerance": 0.09} #1.E-8
+        # prob.solve(MINDOPT(options=options))
+
+        gap_tolerance = 0.09
+        solver = PULP_CBC_CMD(gapRel=gap_tolerance)
+        print("running the solver ...")
+        prob.solve(solver)
 
         self.vocab = sorted([token for token in alltoks if len(token) == 1 or pulp.value(x[varname(token)]) == 1], key=lambda x: (len(x), x))
         self.vocab = {i:token for i, token in enumerate(self.vocab)}
         self.vocab_rev = {token:i for i, token in self.vocab.items()}
+
+    def save(self, file_prefix):
+        """
+        Saves two files: file_prefix.vocab and file_prefix.model
+        This is inspired (but not equivalent to!) sentencepiece's model saving:
+        - model file is the critical one, intended for load()
+        - vocab file is just a pretty printed version for human inspection only
+        """
+        # write the model: to be used in load() later
+        model_file = file_prefix + ".model"
+        with open(model_file, 'w') as f:
+            # write the version, pattern and tokens, that's all that's needed
+            f.write("minbpe v1\n")
+            f.write(f"{self.pattern}\n")
+            # write the special tokens, first the number of them, then each one
+            f.write(f"{len(self.special_tokens)}\n")
+            for special, idx in self.special_tokens.items():
+                f.write(f"{special} {idx}\n")
+            # the vocab dict
+            for idx, token_bytes in self.vocab.items():
+                f.write(f"[{idx}] {token_bytes}\n")
+        # write the vocab: for the human to look at
+        vocab_file = file_prefix + ".vocab"
+        with open(vocab_file, "w", encoding="utf-8") as f:
+            for idx, token_bytes in self.vocab.items():
+                f.write(f"[{idx}] {token_bytes}\n")
+
+    def load(self, model_file):
+        """Inverse of save() but only for the model file"""
+        assert model_file.endswith(".model")
+        # read the model file
+        vocab = {}
+        special_tokens = {}
+        with open(model_file, 'r', encoding="ascii") as f:
+            # read the version
+            version = f.readline().strip()
+            assert version == "minbpe v1"
+            # read the pattern
+            self.pattern = f.readline().strip()
+            # read the special tokens
+            num_special = int(f.readline().strip())
+            for _ in range(num_special):
+                special, special_idx = f.readline().strip().split()
+                special_tokens[special] = int(special_idx)
+            # read the vocab
+            while (line := f.readline().strip()):
+                idx, token = line.split(maxsplit=1)
+                idx = int(idx.strip('[]'))
+                token = ast.literal_eval(token)
+                vocab[idx] = token
+        self.vocab = vocab
+        self.vocab_rev = {token:i for i, token in vocab.items()}
+
