@@ -6,6 +6,7 @@ from mindopt_pulp import MINDOPT
 import pulp
 from pulp import PULP_CBC_CMD
 import ast
+import os
 
 class ILPTokenizer(RegexTokenizer):
     def _encode_chunk(self, text_bytes, vocab=None):
@@ -37,10 +38,7 @@ class ILPTokenizer(RegexTokenizer):
             k = backtrack[i]
             return reconstruct_tokens(k-1) + [text_bytes[k:i+1]]
 
-        if vocab: # called in training, return the size of optimal tokenization
-           return dp[n-1]
-        else: # return an optimal tokenization
-            return [voc[token] for token in reconstruct_tokens(n - 1)]
+        return [voc[token] for token in reconstruct_tokens(n - 1)]
 
     def train(self, text, vocab_size, verbose=False):
         assert vocab_size >= 256
@@ -121,6 +119,23 @@ class ILPTokenizer(RegexTokenizer):
         x = pulp.LpVariable.dicts("x", [varname(tok) for tok in alltoks if len(tok) > 1], 0, 1, pulp.LpBinary)
         y = pulp.LpVariable.dicts("y", (varname(chunk, token, start) for (chunk, start), tokens in P.items() for token in tokens), 0, 1, pulp.LpBinary)
 
+        self.load("/home/ruhollah/ai/minbpe/cwd/1M-ilp/ilp.model")
+        for var in x.values():
+            var.setInitialValue(0)
+        for var in y.values():
+            var.setInitialValue(0)
+        for tok in self.vocab_rev:
+            if len(tok) > 1:
+                x[varname(tok)].setInitialValue(1)
+        for chunk in ids:
+            toks = self._encode_chunk(chunk, self.vocab_rev)
+            start = 0
+            for tok_id in toks:
+                y[varname(chunk, self.vocab[tok_id], start)].setInitialValue(1)
+                start += len(self.vocab[tok_id])
+
+
+
         # Objective function: Minimize the total number of pairs (token, position) used
         prob += pulp.lpSum(ids[chunk] * y[varname(chunk, token, start)]
                         for (chunk, start), tokens in P.items()
@@ -144,7 +159,7 @@ class ILPTokenizer(RegexTokenizer):
                                 if start + len(token) > pos) == 1
 
         # Write the problem as an MPS file
-        prob.writeMPS("lo_ex1.mps")
+        prob.writeMPS("prob.mps")
 
         # Solve the problem using the MINDOPT solver
         # prob.solve(MINDOPT())  # use default options
@@ -161,17 +176,27 @@ class ILPTokenizer(RegexTokenizer):
         #         "SPX/DualTolerance": 1.E-6,
         #         "IPM/PrimalTolerance": 1.E-8,
         #         "IPM/DualTolerance": 1.E-8,
-        #         "IPM/GapTolerance": 0.09} #1.E-8
+        #         "IPM/GapTolerance": 1.E-8} #1.E-8
         # prob.solve(MINDOPT(options=options))
 
-        gap_tolerance = 0.09
-        solver = PULP_CBC_CMD(gapRel=gap_tolerance)
-        print("running the solver ...")
-        prob.solve(solver)
+        #use PULP_CBC_CMD solver   gapRels = [0.9, 0.5, 0.2, 0.035, 0.02, 0.01, 0]
 
-        self.vocab = sorted([token for token in alltoks if len(token) == 1 or pulp.value(x[varname(token)]) == 1], key=lambda x: (len(x), x))
-        self.vocab = {i:token for i, token in enumerate(self.vocab)}
-        self.vocab_rev = {token:i for i, token in self.vocab.items()}
+        gapRels = [0.02, 0.01, 0]
+        for i in range(len(gapRels)):
+            gapRel = gapRels[i]
+            print(f"running the solver with relgap {gapRel} ...")
+            solver = pulp.COIN_CMD(path="/home/ruhollah/.cbc/bin/cbc", threads = 4, warmStart=True, gapRel=gapRel, msg=True) if gapRel else pulp.COIN_CMD(path="/home/ruhollah/.cbc/bin/cbc", threads = 4, warmStart=True, msg=True) #gapRel=0.09,
+            prob.solve(solver)
+            prob.writeMPS(f"prob_{gapRel}.mps")
+            self.vocab = sorted([token for token in alltoks if len(token) == 1 or pulp.value(x[varname(token)]) == 1], key=lambda x: (len(x), x))
+            self.vocab = {i:token for i, token in enumerate(self.vocab)}
+            self.vocab_rev = {token:i for i, token in self.vocab.items()}
+            self.save(os.path.join("models", f"ilp_{gapRel}"))
+
+
+        # self.vocab = sorted([token for token in alltoks if len(token) == 1 or pulp.value(x[varname(token)]) == 1], key=lambda x: (len(x), x))
+        # self.vocab = {i:token for i, token in enumerate(self.vocab)}
+        # self.vocab_rev = {token:i for i, token in self.vocab.items()}
 
     def save(self, file_prefix):
         """
