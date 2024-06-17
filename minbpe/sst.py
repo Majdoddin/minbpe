@@ -2,9 +2,7 @@ import regex as re
 from collections import defaultdict
 from .regex import RegexTokenizer
 from functools import reduce
-from mindopt_pulp import MINDOPT
-import pulp
-from pulp import PULP_CBC_CMD
+from ortools.sat.python import cp_model
 import ast
 import os
 
@@ -93,73 +91,56 @@ class ILPTokenizer(RegexTokenizer):
                     if chunk[start:end] in alltoks:
                         P[(chunk, start)].add(chunk[start:end])
 
-        # Define the problem
-        prob = pulp.LpProblem("TokenizationProblem", pulp.LpMinimize)
+        model = cp_model.CpModel()
 
-        def varname(*args):
-            # convert the tuple to a string with a unique delimiter
-            s = '_'.join(map(str, args))
-            # allowed characters (letters, digits, and underscore)
-            allowed_chars = re.compile(r'[a-zA-Z0-9_]')
-            # escape occurrences of "_x" in the original string
-            s = s.replace('_x', '_xx_')
-
-            result = []
-            for char in s:
-                if allowed_chars.match(char):
-                    result.append(char)
-                else:
-                    # replace invalid character with its Unicode code point in hex
-                    result.append('_x' + format(ord(char), 'x') + '_')
-
-            # join the list into a single string
-            return ''.join(result)
+        x, y = {}, {}
 
         # Define variables
-        x = pulp.LpVariable.dicts("x", [varname(tok) for tok in alltoks if len(tok) > 1], 0, 1, pulp.LpBinary)
-        y = pulp.LpVariable.dicts("y", (varname(chunk, token, start) for (chunk, start), tokens in P.items() for token in tokens), 0, 1, pulp.LpBinary)
-
-        self.load("/home/ruhollah/ai/minbpe/cwd/1M-ilp/ilp.model")
-        for var in x.values():
-            var.setInitialValue(0)
-        for var in y.values():
-            var.setInitialValue(0)
-        for tok in self.vocab_rev:
+        for tok in alltoks:
             if len(tok) > 1:
-                x[varname(tok)].setInitialValue(1)
-        for chunk in ids:
-            toks = self._encode_chunk(chunk, self.vocab_rev)
-            start = 0
-            for tok_id in toks:
-                y[varname(chunk, self.vocab[tok_id], start)].setInitialValue(1)
-                start += len(self.vocab[tok_id])
+                x[tok]= model.new_bool_var(f"{tok}")
+        for (chunk, start), tokens in P.items():
+            for token in tokens:
+                y[chunk, token, start] = model.new_bool_var(f"{chunk}_{token}_{start}")
+
+        # self.load("/home/ruhollah/ai/minbpe/cwd/1M-ilp/ilp.model")
+        # for var in x.values():
+        #     var.setInitialValue(0)
+        # for var in y.values():
+        #     var.setInitialValue(0)
+        # for tok in self.vocab_rev:
+        #     if len(tok) > 1:
+        #         x[varname(tok)].setInitialValue(1)
+        # for chunk in ids:
+        #     toks = self._encode_chunk(chunk, self.vocab_rev)
+        #     start = 0
+        #     for tok_id in toks:
+        #         y[varname(chunk, self.vocab[tok_id], start)].setInitialValue(1)
+        #         start += len(self.vocab[tok_id])
 
 
-
-        # Objective function: Minimize the total number of pairs (token, position) used
-        prob += pulp.lpSum(ids[chunk] * y[varname(chunk, token, start)]
-                        for (chunk, start), tokens in P.items()
-                        for token in tokens)
 
         # Constraint: Exactly (vocab_size - 256) additional tokens must be selected
-        prob += pulp.lpSum(x[varname(token)] for token in alltoks if len(token) > 1) == (vocab_size - 256)
+        model.add(sum(x[token] for token in alltoks if len(token) > 1) == (vocab_size - 256))
 
         # Constraint: only selected tokens may be used in tokenization of chunks
         for (chunk, start), tokens in P.items():
             for token in tokens:
                 if len(token) > 1:
-                    prob += y[varname(chunk, token, start)] <= x[varname(token)]
+                    model.add(y[chunk, token, start] <= x[token])
 
         # Constraint: Complete coverage and non-overlapping
         for chunk in ids:
             for pos in range(len(chunk)):
-                prob += pulp.lpSum(y[varname(chunk, token, start)]
+                model.add_exactly_one(y[chunk, token, start]
                                 for start in range(pos + 1)
                                 for token in P[(chunk, start)]
-                                if start + len(token) > pos) == 1
+                                if start + len(token) > pos)
 
-        # Write the problem as an MPS file
-        prob.writeMPS("prob.mps")
+        # Objective function: Minimize the total number of pairs (token, position) used
+        objective = [cp_model.LinearExpr.term(y[chunk, token, start], ids[chunk])
+                        for chunk, token, start in y]
+        model.minimize(cp_model.LinearExpr.sum(objective))
 
         # Solve the problem using the MINDOPT solver
         # prob.solve(MINDOPT())  # use default options
@@ -181,22 +162,17 @@ class ILPTokenizer(RegexTokenizer):
 
         #use PULP_CBC_CMD solver   gapRels = [0.9, 0.5, 0.2, 0.035, 0.02, 0.01, 0]
 
-        gapRels = [0.02, 0.01, 0]
-        for i in range(len(gapRels)):
-            gapRel = gapRels[i]
-            print(f"running the solver with relgap {gapRel} ...")
-            solver = pulp.COIN_CMD(path="/home/ruhollah/.cbc/bin/cbc", threads = 4, warmStart=True, gapRel=gapRel, msg=True) if gapRel else pulp.COIN_CMD(path="/home/ruhollah/.cbc/bin/cbc", threads = 4, warmStart=True, msg=True) #gapRel=0.09,
-            prob.solve(solver)
-            prob.writeMPS(f"prob_{gapRel}.mps")
-            self.vocab = sorted([token for token in alltoks if len(token) == 1 or pulp.value(x[varname(token)]) == 1], key=lambda x: (len(x), x))
+        solver = cp_model.CpSolver()
+        solver.parameters.log_search_progress = True
+        solver.parameters.symmetry_level = 3
+        solver.parameters.num_search_workers = 7
+        status = solver.solve(model)
+
+        if status == cp_model.OPTIMAL:
+            self.vocab = sorted([token for token in alltoks if len(token) == 1 or solver.value(x[token]) == 1], key=lambda x: (len(x), x))
             self.vocab = {i:token for i, token in enumerate(self.vocab)}
             self.vocab_rev = {token:i for i, token in self.vocab.items()}
-            self.save(os.path.join("models", f"ilp_{gapRel}"))
-
-
-        # self.vocab = sorted([token for token in alltoks if len(token) == 1 or pulp.value(x[varname(token)]) == 1], key=lambda x: (len(x), x))
-        # self.vocab = {i:token for i, token in enumerate(self.vocab)}
-        # self.vocab_rev = {token:i for i, token in self.vocab.items()}
+            print(f"Length of tokenization: {sum(solver.value(y[chunk, token, start]) * ids[chunk] for chunk, token, start in y)}")
 
     def save(self, file_prefix):
         """
