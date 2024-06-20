@@ -51,97 +51,100 @@ class GreedyTokenizer(RegexTokenizer):
 
         #keep just one instance of identical chunks, keep their count in idsw
         tmp = {}
-        for byte_str in chs:
-            tmp[byte_str] = tmp.get(byte_str, 0) + 1
-
-        chs = tuple(tmp.keys())
-        chcs = tuple(tmp.values())
+        for ch in chs:
+            tmp[ch] = tmp.get(ch, 0) + 1
+        chs = tmp
+        # chs = tuple(tmp.keys())
+        # chcs = tuple(tmp.values())
 
         # the key is a token (as bstring), the value is the number of times the token appears in the  tokenizatoin of text-chunks
         alltoks = defaultdict(int)
-        alltoks.update({bytes([idx]):0  for idx in range(256)})
+        onebytes = set(bytes([idx])  for idx in range(256))
+        alltoks.update({tkn:0  for tkn in onebytes})
 
         # add each chunk and all its sublists to alltoks. count the appearences of each token.
-        for i, ch in enumerate(chs):
+        for ch, count in chs.items():
             for start in range(len(ch)):
                 for end in range(start + 1, len(ch) + 1):
-                    alltoks[ch[start:end]] += chcs[i]
+                    alltoks[ch[start:end]] += count
 
         # pruning any token that has same frequency as one of its supertokens
         toremove = set()
         for token in alltoks:
             for start in range(len(token)):
                 for end in range(start + 1, len(token) + 1):
-                    if token[start:end] != token and alltoks[token[start:end]] == alltoks[token]:
-                        toremove.add(token[start:end])
+                    if (subtkn:=token[start:end]) != token and alltoks[subtkn] == alltoks[token]:
+                        toremove.add(subtkn)
 
         # pruning tokens that have small frequency
-        # The constant is emperical, b'over' occured just 13 times in tokenizaton of talor swirt wiki article
-        for token in alltoks:
-            if alltoks[token] <= 3 * max(1, len(text) / 180000):
-                toremove.add(token)
+        # The constant is emperical, b'over' occured just 13 times in tokenizaton of Taylor Swift's wiki article
+        # TODO: take care of rare texts. for example if the text is "aaaaaaa bbbb bbbb bbbb ....", then aaaaaaa should not be removed.
+        if len(text) >= 180000:
+            for token in alltoks:
+                if alltoks[token] <= 3 * len(text) / 180000:
+                    toremove.add(token)
 
         for token in toremove:
             if len(token) > 1:
                 del alltoks[token]
 
         # auxillary data structures for efficiency.
-        # supchunks maps each token to the set of all the text chunks that contain the token.
-        # subtkns maps each token to the set of all of its contagious subtokens
-        supchunks = defaultdict(set)
+        # supchunks maps each token (of length > 1) to the set of all the text chunks that contain the token.
+        # subtkns maps each chunk to the set of all of its contagious subtokens (of length > 1)
+        supchunkss = defaultdict(set)
         subtkns = defaultdict(set)
-        supchunks[b''] = set(chs)
+        supchunkss[b''] = set(ch for ch in chs if len(ch) > 1)
         for ch in chs:
             for start in range(len(ch)):
-                for end in range(start + 1, len(ch) + 1):
-                    if tkn:=ch[start:end] not in alltoks:
+                for end in range(start + 2, len(ch) + 1):
+                    if (tkn:=ch[start:end]) not in alltoks:
                         continue
-                    supchunks[tkn].add(ch)
+                    supchunkss[tkn].add(ch)
                     subtkns[ch].add(tkn)
 
         # initialize vocab bei all single byte tokens. These will not be removed.
-        vocab = set(bytes([idx])  for idx in range(256)) # int -> bytes
+        vocab = set(onebytes)
 
         added, removed = b'', None
-        # utility maps each token to its effect on the length of an optimal tokenization of all chunks:
+        # `utility` maps each token to its effect on the length of an optimal tokenization of all chunks:
         #  if the token is not in vocab: How much the length would decrease if the token is added to the current vocab
         #  if the token is in vocab: How much the length would increase if the token is removed from the current vocab
 
-        # utils maps each (token, chunk) pair to effect of the token on the length of an optimal tokenization of the chunks:
+        # `utils` maps each (token, chunk) pair to effect of the token on the length of an optimal tokenization of the chunk:
         #  if token is None: the length of an optimal tokenization of the chunk. Otherwise
         #   if the token is not in vocab: How much the length would decrease if the token is added to the current vocab
         #   if the token is in vocab: How much the length would increase if the token is removed from the current vocab
         utility, utils  = defaultdict(int), defaultdict(int)
         # Greedy algorithm: iteratively, add the token with most utility to vocab, or removing the token with ...
         while len(vocab) < vocab_size:
-            # update utitlity and utils according to the last add/remove
+            # update utitlity and utils according to the last vocab add/remove
             # change of utility of each token after the last add/remove, is the sum of change of its utility for each chunk
             # enough to consider those chunks that contain the token of the last add/remove (or all chunks if it's the first iteration), and all the tokens contained in those chunks.
-            affected_tokens = (reduce(set.union, [subtkns[chunk] for chunk in supchunks[removed or added]]) if removed or added else alltoks) - set(bytes([idx])  for idx in range(256))
-            # update utils of these chunks
-            for ch in supchunks[removed or added]:
+            affected_tokens = (reduce(set.union, [subtkns[chunk] for chunk in supchunkss[removed or added]]) if removed or added else alltoks.keys()) - onebytes
+            # update utils of the affected chunks
+            for ch in supchunkss[removed or added]:
                 utils[(None, ch)] = self._encode_chunk(ch, vocab)
             # tokens in vocab
             for token in (affected_tokens & vocab):
                 vocab.remove(token)
-                for ch in (supchunks[token] & supchunks[removed or added]):
+                for ch in (supchunkss[token] & supchunkss[removed or added]):
                     #minus the outdated value
-                    utility[token] -= utils[(token, ch)] * chcs[ch]
+                    utility[token] -= utils[(token, ch)] * chs[ch]
                     utils[(token, ch)] = self._encode_chunk(ch, vocab) - utils[(None, ch)]
                     #plus the updated value
-                    utility[token] += utils[(token, ch)] * chcs[ch]
+                    utility[token] += utils[(token, ch)] * chs[ch]
                 vocab.add(token)
 
             # tokens not in vocab
             for token in (affected_tokens - vocab):
                 # sum the improvements on minimal tokenizations, if token is added to vocab. improvements can happen only in affected_chunks
                 vocab.add(token)
-                for ch in (supchunks[token] & supchunks[removed or added]):
+                for ch in (supchunkss[token] & supchunkss[removed or added]):
                     # minus the outdated value
-                    utility[token] -= utils[(token, ch)] * chcs[ch]
-                    utils[(token, ch)] = (utils[(None, ch)] - (self._encode_chunk(chs[ch], vocab)))
+                    utility[token] -= utils[(token, ch)] * chs[ch]
+                    utils[(token, ch)] = (utils[(None, ch)] - (self._encode_chunk(ch, vocab)))
                     # plus the updated value
-                    utility[token] += utils[(token, ch)] * chcs[ch]
+                    utility[token] += utils[(token, ch)] * chs[ch]
                 vocab.remove(token)
 
             # utility of a token can change by addition/removals.
@@ -149,8 +152,8 @@ class GreedyTokenizer(RegexTokenizer):
             # and do not share a chunk with the last added token (because then utility of the last addition many depend on the to-be-removed token, but it should not be affected by a removal, to remain a valid reference point for removals)
             # remove the one with least utility
             removed = None
-            for token in vocab - set(bytes([idx])  for idx in range(256)):
-                if (utility[token] < utility[added]) and not (supchunks[added] & supchunks[token]):
+            for token in vocab - onebytes:
+                if (utility[token] < utility[added]) and not (supchunkss[added] & supchunkss[token]):
                     if removed and utility[token] > utility[removed]:
                         continue
                     removed = token
