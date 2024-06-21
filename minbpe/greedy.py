@@ -70,23 +70,23 @@ class GreedyTokenizer(RegexTokenizer):
 
         # pruning any token that has same frequency as one of its supertokens
         toremove = set()
-        for token in alltoks:
-            for start in range(len(token)):
-                for end in range(start + 1, len(token) + 1):
-                    if (subtkn:=token[start:end]) != token and alltoks[subtkn] == alltoks[token]:
+        for tkn in alltoks:
+            for start in range(len(tkn)):
+                for end in range(start + 1, len(tkn) + 1):
+                    if (subtkn:=tkn[start:end]) != tkn and alltoks[subtkn] == alltoks[tkn]:
                         toremove.add(subtkn)
 
         # pruning tokens that have small frequency
         # The constant is emperical, b'over' occured just 13 times in tokenizaton of Taylor Swift's wiki article
         # TODO: take care of rare texts. for example if the text is "aaaaaaa bbbb bbbb bbbb ....", then aaaaaaa should not be removed.
         if len(text) >= 180000:
-            for token in alltoks:
-                if alltoks[token] <= 3 * len(text) / 180000:
-                    toremove.add(token)
+            for tkn in alltoks:
+                if alltoks[tkn] <= 3 * len(text) / 180000:
+                    toremove.add(tkn)
 
-        for token in toremove:
-            if len(token) > 1:
-                del alltoks[token]
+        for tkn in toremove:
+            if len(tkn) > 1:
+                del alltoks[tkn]
 
         # auxillary data structures for efficiency.
         # supchunks maps each token (of length > 1) to the set of all the text chunks that contain the token.
@@ -114,7 +114,10 @@ class GreedyTokenizer(RegexTokenizer):
         #  if token is None: the length of an optimal tokenization of the chunk. Otherwise
         #   if the token is not in vocab: How much the length would decrease if the token is added to the current vocab
         #   if the token is in vocab: How much the length would increase if the token is removed from the current vocab
-        utility, utils  = defaultdict(int), defaultdict(int)
+
+        # util_rm maps each token to a set. Everytime the token is removed from vocab, its utility is added to the set.
+        # if its utility is already in the set, then it is not removed. This is to avoid endless loops of  addition/removals
+        utility, utils, utilrm  = defaultdict(int), defaultdict(int), defaultdict(set)
         # Greedy algorithm: iteratively, add the token with most utility to vocab, or removing the token with ...
         while len(vocab) < vocab_size:
             # update utitlity and utils according to the last vocab add/remove
@@ -125,40 +128,43 @@ class GreedyTokenizer(RegexTokenizer):
             for ch in supchunkss[removed or added]:
                 utils[(None, ch)] = self._encode_chunk(ch, vocab)
             # tokens in vocab
-            for token in (affected_tokens & vocab):
-                vocab.remove(token)
-                for ch in (supchunkss[token] & supchunkss[removed or added]):
+            for tkn in (affected_tokens & vocab):
+                vocab.remove(tkn)
+                for ch in (supchunkss[tkn] & supchunkss[removed or added]):
                     #minus the outdated value
-                    utility[token] -= utils[(token, ch)] * chs[ch]
-                    utils[(token, ch)] = self._encode_chunk(ch, vocab) - utils[(None, ch)]
+                    utility[tkn] -= utils[(tkn, ch)] * chs[ch]
+                    utils[(tkn, ch)] = self._encode_chunk(ch, vocab) - utils[(None, ch)]
                     #plus the updated value
-                    utility[token] += utils[(token, ch)] * chs[ch]
-                vocab.add(token)
+                    utility[tkn] += utils[(tkn, ch)] * chs[ch]
+                vocab.add(tkn)
 
             # tokens not in vocab
-            for token in (affected_tokens - vocab):
+            for tkn in (affected_tokens - vocab):
                 # sum the improvements on minimal tokenizations, if token is added to vocab. improvements can happen only in affected_chunks
-                vocab.add(token)
-                for ch in (supchunkss[token] & supchunkss[removed or added]):
+                vocab.add(tkn)
+                for ch in (supchunkss[tkn] & supchunkss[removed or added]):
                     # minus the outdated value
-                    utility[token] -= utils[(token, ch)] * chs[ch]
-                    utils[(token, ch)] = (utils[(None, ch)] - (self._encode_chunk(ch, vocab)))
+                    utility[tkn] -= utils[(tkn, ch)] * chs[ch]
+                    utils[(tkn, ch)] = (utils[(None, ch)] - (self._encode_chunk(ch, vocab)))
                     # plus the updated value
-                    utility[token] += utils[(token, ch)] * chs[ch]
-                vocab.remove(token)
+                    utility[tkn] += utils[(tkn, ch)] * chs[ch]
+                vocab.remove(tkn)
 
             # utility of a token can change by addition/removals.
             # from the tokens in vocab that now have less utility than the last added token,
             # and do not share a chunk with the last added token (because then utility of the last addition many depend on the to-be-removed token, but it should not be affected by a removal, to remain a valid reference point for removals)
+            # and are not already removed having same utility (to avoid endless loops of  addition/removals)
             # remove the one with least utility
             removed = None
-            for token in vocab - onebytes:
-                if (utility[token] < utility[added]) and not (supchunkss[added] & supchunkss[token]):
-                    if removed and utility[token] > utility[removed]:
+            for tkn in vocab - onebytes:
+                if (utility[tkn] < utility[added]) and (utility[tkn] not in utilrm[tkn]) and not (supchunkss[added] & supchunkss[tkn]):
+                    if removed and utility[tkn] > utility[removed]:
                         continue
-                    removed = token
+                    removed = tkn
             if removed:
+                utilrm[removed].add(utility[tkn])
                 vocab.remove(removed)
+
                 if verbose:
                     print(f"removed {removed} utility:{utility[removed]}")
                 continue
