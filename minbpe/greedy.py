@@ -106,74 +106,74 @@ class GreedyTokenizer(RegexTokenizer):
         vocab = set(onebytes)
 
         added, removed = b'', None
-        # `utility` maps each token to its effect on the length of an optimal tokenization of all chunks:
+        # `margimpact`, marginal impact, maps each token to its effect on the length of an optimal tokenization of all chunks:
         #  if the token is not in vocab: How much the length would decrease if the token is added to the current vocab
         #  if the token is in vocab: How much the length would increase if the token is removed from the current vocab
 
-        # `utils` maps each (token, chunk) pair to effect of the token on the length of an optimal tokenization of the chunk:
+        # `michk` , marginal impact on chunk, maps each (token, chunk) pair to effect of the token on the length of an optimal tokenization of the chunk:
         #  if token is None: the length of an optimal tokenization of the chunk. Otherwise
         #   if the token is not in vocab: How much the length would decrease if the token is added to the current vocab
         #   if the token is in vocab: How much the length would increase if the token is removed from the current vocab
 
-        # util_rm maps each token to a set. Everytime the token is removed from vocab, its utility is added to the set.
+        # mirm, marginal impact on removal, maps each token to a set. Everytime the token is removed from vocab, its utility is added to the set.
         # if its utility is already in the set, then it is not removed. This is to avoid endless loops of  addition/removals
-        utility, utils, utilrm  = defaultdict(int), defaultdict(int), defaultdict(set)
+        margimpact, michk, mirm  = defaultdict(int), defaultdict(int), defaultdict(set)
         # Greedy algorithm: iteratively, add the token with most utility to vocab, or removing the token with ...
         while len(vocab) < vocab_size:
-            # update utitlity and utils according to the last vocab add/remove
-            # change of utility of each token after the last add/remove, is the sum of change of its utility for each chunk
+            # update margimpact and michk according to the last vocab add/remove
+            # change of marginal impact of each token after the last add/remove, is the sum of change of its marginal impact for each chunk
             # enough to consider those chunks that contain the token of the last add/remove (or all chunks if it's the first iteration), and all the tokens contained in those chunks.
-            affected_tokens = (reduce(set.union, [subtkns[chunk] for chunk in supchunkss[removed or added]]) if removed or added else alltoks.keys()) - onebytes
-            # update utils of the affected chunks
+            affected_tkns = (reduce(set.union, [subtkns[chunk] for chunk in supchunkss[removed or added]]) if removed or added else alltoks.keys()) - onebytes
+            # update michk of the affected chunks
             for ch in supchunkss[removed or added]:
-                utils[(None, ch)] = self._encode_chunk(ch, vocab)
+                michk[(None, ch)] = self._encode_chunk(ch, vocab)
             # tokens in vocab
-            for tkn in (affected_tokens & vocab):
+            for tkn in (affected_tkns & vocab):
                 vocab.remove(tkn)
                 for ch in (supchunkss[tkn] & supchunkss[removed or added]):
                     #minus the outdated value
-                    utility[tkn] -= utils[(tkn, ch)] * chs[ch]
-                    utils[(tkn, ch)] = self._encode_chunk(ch, vocab) - utils[(None, ch)]
+                    margimpact[tkn] -= michk[(tkn, ch)] * chs[ch]
+                    michk[(tkn, ch)] = self._encode_chunk(ch, vocab) - michk[(None, ch)]
                     #plus the updated value
-                    utility[tkn] += utils[(tkn, ch)] * chs[ch]
+                    margimpact[tkn] += michk[(tkn, ch)] * chs[ch]
                 vocab.add(tkn)
 
             # tokens not in vocab
-            for tkn in (affected_tokens - vocab):
-                # sum the improvements on minimal tokenizations, if token is added to vocab. improvements can happen only in affected_chunks
+            for tkn in (affected_tkns - vocab):
+                # sum the improvements on minimal tokenizations, if token is added to vocab. improvements can happen only in affected_chnks
                 vocab.add(tkn)
                 for ch in (supchunkss[tkn] & supchunkss[removed or added]):
                     # minus the outdated value
-                    utility[tkn] -= utils[(tkn, ch)] * chs[ch]
-                    utils[(tkn, ch)] = (utils[(None, ch)] - (self._encode_chunk(ch, vocab)))
+                    margimpact[tkn] -= michk[(tkn, ch)] * chs[ch]
+                    michk[(tkn, ch)] = (michk[(None, ch)] - (self._encode_chunk(ch, vocab)))
                     # plus the updated value
-                    utility[tkn] += utils[(tkn, ch)] * chs[ch]
+                    margimpact[tkn] += michk[(tkn, ch)] * chs[ch]
                 vocab.remove(tkn)
 
-            # utility of a token can change by addition/removals.
-            # from the tokens in vocab that now have less utility than the last added token,
-            # and do not share a chunk with the last added token (because then utility of the last addition many depend on the to-be-removed token, but it should not be affected by a removal, to remain a valid reference point for removals)
-            # and are not already removed having same utility (to avoid endless loops of  addition/removals)
+            # marginal impact of a token can change by addition/removals.
+            # from the tokens in vocab that now have less marginal impact than the last added token,
+            # and do not share a chunk with the last added token (because then marginal impact of the last addition many depend on the to-be-removed token, but it should not be affected by a removal, to remain a valid reference point for removals)
+            # and are not already removed having same marginal impact (to avoid endless loops of  addition/removals)
             # remove the one with least utility
             removed = None
             for tkn in vocab - onebytes:
-                if (utility[tkn] < utility[added]) and (utility[tkn] not in utilrm[tkn]) and not (supchunkss[added] & supchunkss[tkn]):
-                    if removed and utility[tkn] > utility[removed]:
+                if (margimpact[tkn] < margimpact[added]) and (margimpact[tkn] not in mirm[tkn]) and not (supchunkss[added] & supchunkss[tkn]):
+                    if removed and margimpact[tkn] > margimpact[removed]:
                         continue
                     removed = tkn
             if removed:
-                utilrm[removed].add(utility[tkn])
+                mirm[removed].add(margimpact[tkn])
                 vocab.remove(removed)
 
                 if verbose:
-                    print(f"removed {removed} utility:{utility[removed]}")
+                    print(f"removed {removed} utility:{margimpact[removed]}")
                 continue
 
-            # add the token to vocab, which has the most utility.
-            added = max((token for token in utility if token not in vocab), key=utility.get)
+            # add the token to vocab, which has the most marginal impact.
+            added = max((token for token in margimpact if token not in vocab), key=margimpact.get)
             vocab.add(added)
             if verbose:
-                print(f"added {added} utility:{utility[added]}")
+                print(f"added {added} utility:{margimpact[added]}")
 
         # vocab of id:token, and vocab_rev of token:id
         self.vocab = {i:token for i, token in enumerate(vocab)}
