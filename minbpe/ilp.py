@@ -1,13 +1,22 @@
 import regex as re
 from collections import defaultdict
 from .regex import RegexTokenizer
-from functools import reduce
 from ortools.sat.python import cp_model
 import ast
-import os
+
+"""
+Models the training of a tokenizer as an Integer Linear Programming problem,
+and uses a SAT-solver to find an optimal solution to it. It is mathematically guaranteed that the tokenization of the training text with the resulting
+vocabulary has the minimum number of tokens, among all the vocabs of the same size.
+
+Also contains the load() and save() functions.
+"""
 
 class ILPTokenizer(RegexTokenizer):
     def _encode_chunk(self, text_bytes, vocab=None):
+        # returns a mathematically guaranteed optimal (least number of tokens) tokenizaton of text_bytes, given the vocab
+        # uses dynamic programming
+
         # in training vocab != None
         voc = vocab if vocab else self.vocab_rev
 
@@ -71,10 +80,10 @@ class ILPTokenizer(RegexTokenizer):
 
         # pruning tokens that have small frequency
         # The constant is emperical, b'over' occured just 13 times in tokenizaton of talor swirt wiki article
-        if len(alltoks) - len(toremove) > 2000:
-            for token in alltoks:
-                if alltoks[token] <= 3 * max(1, len(text) / 180000):
-                    toremove.add(token)
+        if len(text) >= 180000:
+            for tkn in alltoks:
+                if alltoks[tkn] <= 3 * len(text) / 180000:
+                    toremove.add(tkn)
 
         for token in toremove:
             if len(token) > 1:
@@ -82,8 +91,8 @@ class ILPTokenizer(RegexTokenizer):
         # we do not need the values any more
         alltoks = set(alltoks.keys())
 
-        # Precompute positions where each token can appear in each chunk
-        #get rid of substr
+        # precompute positions where each token can appear in each chunk
+        # get rid of substr
         P = defaultdict(set)
         for chunk in ids:
             for start in range(len(chunk)):
@@ -102,23 +111,6 @@ class ILPTokenizer(RegexTokenizer):
         for (chunk, start), tokens in P.items():
             for token in tokens:
                 y[chunk, token, start] = model.new_bool_var(f"{chunk}_{token}_{start}")
-
-        # self.load("/home/ruhollah/ai/minbpe/cwd/1M-ilp/ilp.model")
-        # for var in x.values():
-        #     var.setInitialValue(0)
-        # for var in y.values():
-        #     var.setInitialValue(0)
-        # for tok in self.vocab_rev:
-        #     if len(tok) > 1:
-        #         x[varname(tok)].setInitialValue(1)
-        # for chunk in ids:
-        #     toks = self._encode_chunk(chunk, self.vocab_rev)
-        #     start = 0
-        #     for tok_id in toks:
-        #         y[varname(chunk, self.vocab[tok_id], start)].setInitialValue(1)
-        #         start += len(self.vocab[tok_id])
-
-
 
         # Constraint: Exactly (vocab_size - 256) additional tokens must be selected
         model.add(sum(x[token] for token in alltoks if len(token) > 1) == (vocab_size - 256))
@@ -141,26 +133,6 @@ class ILPTokenizer(RegexTokenizer):
         objective = [cp_model.LinearExpr.term(y[chunk, token, start], ids[chunk])
                         for chunk, token, start in y]
         model.minimize(cp_model.LinearExpr.sum(objective))
-
-        # Solve the problem using the MINDOPT solver
-        # prob.solve(MINDOPT())  # use default options
-        # options = {
-        #         "Method": -1,
-        #         "NumThreads": 0,
-        #         "Presolve": 1,
-        #         "Dualization": -1,
-        #         "SPX/MaxIterations": 2147483647,
-        #         "SPX/ColumnGeneration": -1,
-        #         "IPM/MaxIterations": 400,
-        #         "MaxTime": 1.7976931348623158e+308,
-        #         "SPX/PrimalTolerance": 1.E-6,
-        #         "SPX/DualTolerance": 1.E-6,
-        #         "IPM/PrimalTolerance": 1.E-8,
-        #         "IPM/DualTolerance": 1.E-8,
-        #         "IPM/GapTolerance": 1.E-8} #1.E-8
-        # prob.solve(MINDOPT(options=options))
-
-        #use PULP_CBC_CMD solver   gapRels = [0.9, 0.5, 0.2, 0.035, 0.02, 0.01, 0]
 
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True
