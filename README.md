@@ -1,30 +1,69 @@
 # minbpe
 
-Code for a (byte-level) Subset Selection Tokenization (SST) algorithm for LLM tokenization. It beats the commonly used Byte Pair Encoding (BPE) algorithm by 2% in compression, and 4 times faster tokenization speed.
+Minimal, clean code for a new (byte-level) greedy algorithm for LLM tokenization. It beats the commonly used Byte Pair Encoding (BPE) algorithm by 2% for text (5% for code) compression, and has 4 times faster tokenization speed.
 The algorithm is "byte-level" because it runs on UTF-8 encoded strings.
 
 Note that every impromvent in compression (number of tokens in the tokenization of a text) is important, as it directly translates to  LLM's throughput.
 
-Basically, finding the optimal tokenization vocabulary can be seen as subset selection problem, where the selected tokens should give a minimal (in size) tokenization of the (chunks) of the training text. It seems to be a hard problem. In this implementation, we use the greedy method, where in each step a token is added to the vocab if it maximizes the gain, or is removed if it gain is less than the last added token (gain of tokens change as the vocab evolvs).
+Finding the optimal tokenization vocabulary for a given training text, can be modelled as an Integer Linear Programming problem, where the selected tokens should give a minimal (in number of tokens) tokenization of the (chunks) of the training text. To test the efficiency of the greedy tokenizer, I have implemented an ILP tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turnes out that the Greedy algorithm is within 1% of the optimal solution.
+
+It seems to be a hard problem. In this implementation, we use the greedy method, where in each step a token is added to the vocab if it maximizes the gain, or is removed if it gain is less than the last added token (gain of tokens change as the vocab evolvs).
+
+**How does Greedy Tokenizer work?**
+After splitting the text using a regular expression into chunks, all the chunk substrings are taken as tokens. After an initial pruning of infrequent tokens, the vocab is initialized with single byte tokens. Then iteratively, a token is added to the vocab, if it shortens the tokenizaion of the training text (with the current vocab) the most. And tokens are removed from vocab, if they do not contribute enough any more.
+
+This needs special datastructures to run efficiently, and extra care should be given to avoid endless loops of additions/removals.
+
+**Comparision**
+|          | Taylor Swift's article| Wikitext-103 (1MB) | Linux source code (1MB)|
+|----------|--------------|---------------------|------------------------|
+| Greedy   | Data 1   | tr: 47.2%, enc: 48.4%   | tr: 56.6%, enc: 61.9|
+| ILP      | Data 3   | tr: 47.3% lower-bound: 46.8%  |    nothing    |
+| BPE      | Data 5   | tr: 48.3%, enc: 49.0%   | tr: 59.9, enc: 63.6     |
+compression achieved
+
+Objective value:                506413.00000000
+Lower bound:                    490806.500
+
+491305,495770
+
+regex 628048 tokens on train text
+loaded regex 667392 tokens
+
+
+
+|          | Taylor Swift's article (185KB)| Wikitext-103 (1MB) | Linux source code (1MB)|
+|----------|--------------|---------------------|------------------------|
+| Greedy   | Data 1   | tr: 55.05s, enc: 1.33s  | tr: 13.98s, enc:1.48 |
+| ILP      | Data 3   | < 30m   ||
+| BPE (original)      | tr:18.55s, enc: 0.31    | tr: 81:80s, enc: 1:64s   | tr:100.91s, enc:1.25 |
+| BPE (unique chunks) | Data 5   | tr: 10.61,  enc:0.40  | tr: 7.45s,  enc:0.27s |
+training and encoding runtimes
 
 **What is the problem with BPE?**
-for a token to be in vocab it is not just important appear frequently in training text, but its length is also important. So the word "Pneumonoultramicroscopicsilicovolcanoconiosis" can be a better choice than "Eke" even the former is 40 times less frequent.
+To take a token in the vocab, not just its frequently, but also its length is important. Because you can get a better text compression with longer tokens.
 
-Byte Pair Encoding (BPE) tries to solve the sebset selection problem by doing subsequent merges to frequent pairs of the vocab.
-Now, suppose the merges li->X1 co->X2 are done but X1X2 cannot be merged, because "lico" is not frequent. So the following merges cannot result in the long word, just becasue some part of it is infrequent ☹️
+Byte Pair Encoding (BPE) does subsequent merges of the most frequent pairs in the vocab. Now, suppose "nevertheless" is a frequent word in the training text. The merges th->X1, X1e->X2 and le->X3 are done, but X2X3 is not selected to merge, because "thele" is not frequent in the training text. So the following merges cannot result in token 'nevertheless', just becasue some part of it is infrequent ☹️
 
 
-This code is based on Karpathy's [minbpe](https://github.com/karpathy/minbpe). See that repo for more background and an excellent lecture.
 
-There are two Tokenizers in this repository, both of which can perform the 3 primary functions of a Tokenizer: 1) train the tokenizer vocabulary, 2) encode from text to tokens, 3) decode from tokens to text. The files of the repo are as follows:
 
-1. [minbpe/base.py](minbpe/base.py): Implements the `Tokenizer` class, which is the base class. It contains the `train`, `encode`, and `decode` stubs, save/load functionality, and there are also a few common utility functions. This class is not meant to be used directly, but rather to be inherited from.
-<!-- 2. [minbpe/basic.py](minbpe/basic.py): Implements the `BasicTokenizer`, the simplest implementation of the BPE algorithm that runs directly on text.  -->
-2. [minbpe/regex.py](minbpe/regex.py): Implements the `RegexTokenizer` that implements the BPE algorithm, but splits the input text by a regex pattern, which is a preprocessing stage that splits up the input text by categories (think: letters, numbers, punctuation) before tokenization. This ensures that no merges will happen across category boundaries. This was introduced in the GPT-2 paper and continues to be in use as of GPT-4.
-<!-- 4. [minbpe/gpt4.py](minbpe/gpt4.py): Implements the `GPT4Tokenizer`. This class is a light wrapper around the `RegexTokenizer` (2, above) that exactly reproduces the tokenization of GPT-4 in the [tiktoken](https://github.com/openai/tiktoken) library. The wrapping handles some details around recovering the exact merges in the tokenizer, and the handling of some unfortunate (and likely historical?) 1-byte token permutations. -->
-3. [minbpe/sst.py] Implements the `SSTTokenizer` class, that implements the SST algortihm, and also splits the input text by a regex pattern.
 
-Finally, the script [train.py](train.py) trains the two tokenizers on the input text [tests/taylorswift.txt](tests/taylorswift.txt) (this is the Wikipedia entry for her), or on wikitext-103 (a collectoin of Wikipedia articles) and saves the vocab to disk for visualization.
+
+
+
+This code is a fork of Karpathy's [minbpe](https://github.com/karpathy/minbpe). See that repo for more background and an excellent lecture.
+
+I have added two Tokenizers, both of which can perform the 3 primary functions of a Tokenizer: 1) train the tokenizer vocabulary, 2) encode from text to tokens, 3) decode from tokens to text.
+Moreover, I have improved the implementation of BPE, where only distinct chunks of code are kept in a list, while keeping track of their frequency. This results in a 5x faster code.
+The files of the repo are as follows:
+
+1. [minbpe/greedy.py](minbpe/greedy.py): Implements the `GreedyTokenizer` class, which is a subclass of `RegexTokenizer`.
+2. [minbpe/ilp.py](minbpe/ilp.py): Implements the `ILPTokenizer` class, which is a subclass of `RegexTokenizer`.
+3. [minbpe/regex.py](minbpe/regex.py): Implements the `RegexTokenizer` that improved implementation of the BPE algorithm.
+
+
+Finally, the script [train.py](train.py) trains the three tokenizers and saves the vocab to disk for visualization. The training text can be selected to be [tests/taylorswift.txt](tests/taylorswift.txt) (this is the Wikipedia entry for her), or wikitext-103 (a collectoin of Wikipedia articles), or linux kernel source.
 
 All of the files above are very short and thoroughly commented, and also contain a usage example on the bottom of the file.
 
