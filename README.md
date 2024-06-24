@@ -7,7 +7,7 @@ Note that every improvement in compression (number of tokens in the tokenization
 AFAIK most research on LLM tokenization is focused on boosting the speed, so this work is somehow unique in also improving compression.
 
 **The Greedy tokenizer is almost optimal**
-Selecting the optimal tokenization vocabulary for a given training text, can be modelled as an Integer Linear Programming (ILP) problem, where the vocab tokens should give a minimal (in number of tokens) tokenization of the (chunks of the) training text. To test the efficiency of the Greedy Tokenizer, I have implemented an ILP Tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turnes out that the Greedy Tokenizer is within 1% of the optimal solution.
+Selecting the optimal tokenization vocabulary for a given training text, can be modelled as an Integer Linear Programming (ILP) problem, where the vocab tokens should give a minimal (in number of tokens) tokenization of the (chunks of the) training text. To test the efficiency of the Greedy Tokenizer, I have implemented an ILP Tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turns out that the Greedy Tokenizer is within 1% of the optimal solution.
 
 The ILP Tokenizer can be used as an independent tokenizer, although it takes longer to train (depending on the target optimization rate).
 
@@ -43,7 +43,7 @@ The runtime comparison is shown below. We see that the Greedy Tokenizer has abou
 |          | Taylor Swift's article (185KB)| Wikitext-103 (1MB) | Linux source code (1MB)|
 |----------|--------------|---------------------|------------------------|
 | ILP      | _  | < 30m   | _ |
-| Greedy   | tr: 10.93s  | tr: 55.05s, enc: 1.33s  | tr: 13.98s, enc: 1.48s |
+| Greedy   | tr: 10.93s  | tr: 52.39s, enc: 1.33s  | tr: 11.96s, enc: 1.48s |
 | BPE (unique chunks) | tr: 3.22s, enc: 0.11s   | tr: 10.61s,  enc: 0.40s  | tr: 7.45s,  enc: 0.27s |
 | BPE (original)| tr: 18.55s, enc: 0.31s    | tr: 81:80s, enc: 1:64s   | tr: 100.91s, enc: 1.25s |
 
