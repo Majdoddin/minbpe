@@ -116,10 +116,10 @@ class GreedyTokenizer(RegexTokenizer):
         #   if the token is not in vocab: How much the length would decrease if the token is added to the current vocab
         #   if the token is in vocab: How much the length would increase if the token is removed from the current vocab
 
-        # mirm, marginal impact on removal, maps each token to a set. Everytime the token is removed from vocab, its utility is added to the set.
-        # if its utility is already in the set, then it is not removed. This is to avoid endless loops of  addition/removals
+        # mirm, marginal impact on removal, maps each token to a set. Everytime the token is removed from vocab, its marginal impact is added to the set.
+        # if its marginal impact is already in the set, then it is not removed. This is to avoid endless loops of  addition/removals
         margimpact, michk, mirm  = defaultdict(int), defaultdict(int), defaultdict(set)
-        # Greedy algorithm: iteratively, add the token with most utility to vocab, or removing the token with ...
+        # Greedy algorithm: iteratively, add the token with the highest marginal impact to vocab, or removing the token with ...
         while len(vocab) < vocab_size:
             # update margimpact and michk according to the last vocab add/remove
             # change of marginal impact of each token after the last add/remove, is the sum of change of its marginal impact for each chunk
@@ -155,7 +155,7 @@ class GreedyTokenizer(RegexTokenizer):
             # from the tokens in vocab that now have less marginal impact than the last added token,
             # and do not share a chunk with the last added token (because then marginal impact of the last addition many depend on the to-be-removed token, but it should not be affected by a removal, to remain a valid reference point for removals)
             # and are not already removed having same marginal impact (to avoid endless loops of  addition/removals)
-            # remove the one with least utility
+            # remove the one with the least marginal impact
             removed = None
             for tkn in vocab - onebytes:
                 if (margimpact[tkn] < margimpact[added]) and (margimpact[tkn] not in mirm[tkn]) and not (supchunkss[added] & supchunkss[tkn]):
@@ -163,22 +163,23 @@ class GreedyTokenizer(RegexTokenizer):
                         continue
                     removed = tkn
             if removed:
-                mirm[removed].add(margimpact[tkn])
+                mirm[removed].add(margimpact[removed])
                 vocab.remove(removed)
 
                 if verbose:
-                    print(f"removed {removed} utility:{margimpact[removed]}")
+                    print(f"removed {removed}  marginal impact:{margimpact[removed]}")
                 continue
 
             # add the token to vocab, which has the most marginal impact.
             added = max((token for token in margimpact if token not in vocab), key=margimpact.get)
             vocab.add(added)
             if verbose:
-                print(f"added {added} utility:{margimpact[added]}")
+                print(f"added {added}  marginal impact:{margimpact[added]}")
 
         # vocab of id:token, and vocab_rev of token:id
-        self.vocab = {i:token for i, token in enumerate(vocab)}
-        self.vocab_rev = {token:i for i, token in enumerate(vocab)}
+        self.vocab = sorted(vocab, key=lambda x: (len(x), x)) #{i:token for i, token in enumerate(vocab)}
+        self.vocab = {i:token for i, token in enumerate(self.vocab)}
+        self.vocab_rev = {token:i for i, token in self.vocab.items()}
 
     def save(self, file_prefix):
         """
