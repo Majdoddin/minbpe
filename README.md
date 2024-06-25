@@ -72,7 +72,6 @@ Finally, the script [train.py](train.py) trains the three tokenizers and saves t
 All of the files above are very short and thoroughly commented, and also contain a usage example on the bottom of the file.
 
 ## Quick start
----
 As the simplest example, we can test the Greedy Tokenizer as follows:
 
 ```python
@@ -93,8 +92,6 @@ The tricky thing to note is that the GreedyTokenizer, like BPE, always allocates
 
 
 ## Training
----
-
 Unlike [tiktoken](https://github.com/openai/tiktoken), this code allows you to train your own tokenizer.
 
 Following along with what OpenAI did for their text tokenizer, it's a good idea to adopt their approach of using regex pattern to split the text by categories. The GPT-4 pattern is a default with the `GreedyTokenizer`, `ILPTokenizer` and `RegexTokenizer`, so you'd simply do something like:
