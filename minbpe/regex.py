@@ -99,8 +99,12 @@ class RegexTokenizer(Tokenizer):
         text = text_bytes.decode("utf-8", errors="replace")
         return text
 
-    def _encode_chunk(self, text_bytes):
-        voc = self.vocab_rev
+    def _encode_chunk(self, text_bytes, vocab=None):
+        # returns a guaranteed optimal (least number of tokens) tokenizaton of text_bytes, given the vocab
+        # uses dynamic programming
+
+        # in training vocab != None
+        voc = vocab if vocab else self.vocab_rev
 
         n = len(text_bytes)
         dp = [float("inf") for _ in range(n)]
@@ -127,7 +131,10 @@ class RegexTokenizer(Tokenizer):
             k = backtrack[i]
             return reconstruct_tokens(k-1) + [text_bytes[k:i+1]]
 
-        return [voc[token] for token in reconstruct_tokens(n - 1)]
+        if vocab: # called in training: return the length of optimal tokenization
+           return dp[n-1]
+        else: # called in encoding: return the tokens of an optimal tokenization
+            return [voc[token] for token in reconstruct_tokens(n - 1)]
 
     def encode_ordinary(self, text):
         """Encoding that ignores any special tokens."""
