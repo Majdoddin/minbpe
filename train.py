@@ -15,7 +15,7 @@ train_text = test_text = open("../tests/taylorswift.txt", "r", encoding="utf-8")
 # train_text = text[:2**20]
 # test_text = text[2**20:2 * 2**20]
 
-# text = open("../tests/wikitext.txt", "r", encoding="utf-8").read()
+# text = open("../tests/wikitext_103.txt", "r", encoding="utf-8").read()
 # train_text = text[:2**20]
 # test_text = text[2**20:2 * 2**20]
 

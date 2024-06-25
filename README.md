@@ -33,7 +33,7 @@ Given the fixed vocabulary after training, a chunk of text can be tokenized in m
 The same algorithm is used by the Greedy Tokenizer.
 
 **Comparison**
-The table below shows the compression rate of the three tokenizers, on training text and by tokenizing a test text. We define the compression rate as
+The table below shows the compression rate of the three tokenizers, on training and test text. We define the compression rate as
 
 (number of tokens in the tokenization of the text) / (length of text in bytes).
 
@@ -45,16 +45,15 @@ Also notice how Optimal Chunk Tokenization improves the compression of BPE.
 | ILP      |     | tr: 47.3%, lower-bound: 46.8%  |       |
 | Greedy   | tr: 44.8%   | tr: 47.2%, tst: 48.4%   | tr: 56.6%, tst: 61.9%|
 | BPE      | tr: 47.1%   | tr: 48.3%, tst: 49.0%   | tr: 59.9%, tst: 63.6% |
-| BPE (optimal dec.)     | tr: 46.9% | tr:48.2%, tst: 48.7% | tr: 59.6%, tst: 63.4% |
+| BPE (optimized)     | tr: 46.9% | tr:48.2%, tst: 48.7% | tr: 59.6%, tst: 63.4% |
 
-The runtime comparison is shown below. We see that the Greedy Tokenizer has about the same speed as BPE, but is slower than the boosted BPE. They are run on a CPU with 4 hard cores (8 soft). ILp is run on 48 cores.
+The runtime comparison of training and encoding is shown below. We see that the Greedy Tokenizer is faster than BPE. It has slower training than boosted BPE, but is as fast in Encoding. They are run on a CPU with 4 hard cores (8 soft). ILp is run on 48 cores.
 
 |          | Taylor Swift's article (185KB)| Wikitext-103 (1MB) | Linux source code (1MB)|
 |----------|--------------|---------------------|------------------------|
 | ILP      | _  | < 30m   | _ |
-| Greedy   | tr: 10.93s  | tr: 52.39s, tst: 1.33s  | tr: 11.96s, tst: 1.48s |
-| BPE (unique chunks) | tr: 3.22s, tst: 0.11s   | tr: 10.61s,  tst: 0.40s  | tr: 7.45s,  tst: 0.27s |
-| BPE (unique chunks, optimal dec.)| tr: 3.20s, tst: 0.11s | tr: 11.69s, tst: 0.35s | tr: 8:04s, tst:0.30s |
+| Greedy   | tr: 10.32s, enc:0.10 | tr: 52.81s, tst: 0.38s  | tr: 13.37s, tst: 0.30s |
+| BPE (optimized)| tr: 3.20s, tst: 0.11s | tr: 11.69s, tst: 0.35s | tr: 8:04s, tst:0.30s |
 | BPE (original)| tr: 18.55s, tst: 0.31s    | tr: 81:80s, tst: 1:64s   | tr: 100.91s, tst: 1.25s |
 
 ---
