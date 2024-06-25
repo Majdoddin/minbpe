@@ -4,17 +4,19 @@ The algorithm is "byte-level" because it runs on UTF-8 encoded strings.
 
 Note that every improvement in compression (number of tokens in the tokenization of a text) is important, as it directly translates to  LLM's throughput.
 
-AFAIK most research on LLM tokenization is focused on boosting the speed, so this work is somehow unique in also improving compression.
+AFAIK most research on LLM tokenization is focused on boosting the speed, so this work is somehow unique in (also) improving the compression.
 
 **The Greedy tokenizer is almost optimal**
-Selecting the optimal tokenization vocabulary for a given training text, can be modelled as an Integer Linear Programming (ILP) problem, where the vocab tokens should give a minimal (in number of tokens) tokenization of the (chunks of the) training text. To test the efficiency of the Greedy Tokenizer, I have implemented an ILP Tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turns out that the Greedy Tokenizer is within 1% of the optimal solution.
+Selecting the optimal tokenization vocabulary for a given training text, can be modelled as an Integer Linear Programming (ILP) problem, where the vocab tokens should give a minimal (in number of tokens) tokenization of the (chunks of the) training text.
 
-The ILP Tokenizer can be used as an independent tokenizer, although it takes longer to train (depending on the target optimization rate).
+To measure the the compression efficiency of the Greedy Tokenizer, I have implemented an ILP Tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turns out that the Greedy Tokenizer is within 1% of the optimal solution.
+
+The ILP Tokenizer can be used as an independent tokenizer, although it takes longer to train (within 1-2% of optimal solution takes ~15 min. on 48 CPU cores).
 
 **What is the problem with BPE?**
 To take a token in the vocab, not just its frequency, but also its length is important. Because its contribution to the compression is freq * length.
 
-BPE does subsequent merges of the most frequent pairs in the vocab. Now, suppose "nevertheless" has a high (freq * length) in the training text, and BPE has done the merges th->X1, X1e->X2 and le->X3, but it does not merge X2X3, because "thele" is not frequent in the training text. So the following merges cannot result in token "nevertheless", just because some part of it is infrequent ☹️
+BPE does subsequent merges of the most frequent pairs in the vocab. Now, suppose token "nevertheless" has a high (freq * length) in the training text, and BPE has done the merges th->X1, X1e->X2 and le->X3, but it does not merge X2X3, because "thele" is not frequent in the training text. So the following merges cannot result in token "nevertheless", just because some part of it is infrequent ☹️
 
 
 **How does the Greedy Tokenizer work?**
@@ -22,30 +24,38 @@ After splitting the text using a regular expression into chunks, all the chunk s
 
 This needs special data structures to run efficiently, and extra care should be given to avoid endless loops of additions/removals.
 
-**Exploiting the redundancy in chunks**
+**Keep just the unique chunks**
 In long texts, the set of unique chunks is about 10% of the total number of chunks. Since identical chunks receive the same tokenization, we can boost speed by keeping just one instance of each identical chunk while noting its frequency. This does not affect the final vocabulary. This way, I have achieved a 10x speed-up in the runtime of both the BPE and Greedy Tokenizers.
 
+**Optimal chunk tokenization**
+Given the fixed vocabulary after training, a chunk of text can be tokenized in many ways. BPE apply merges to the chunk, similar to training (albeit only those in the vocab), to tokenize. But this is suboptimal. I replaced it with a dynamic programming algorithm, with guaranteed minimum number of tokens for a chunk. Without affecting the runtime, it improves the compression of BPE up to 0.3%.
+
+The same algorithm is used by the Greedy Tokenizer.
+
 **Comparison**
-The table below shows the compression rate of the three tokenizers, on training text and by encoding. We define the compression rate as
+The table below shows the compression rate of the three tokenizers, on training text and by tokenizing a test text. We define the compression rate as
 
 (number of tokens in the tokenization of the text) / (length of text in bytes).
 
 We see that the Greedy Tokenizer does 1.1% better compression than BPE on English Wikipedia. It can do even better on specialized text, like code. It does 3.3% better compression on Linux source code.
+Also notice how Optimal Chunk Tokenization improves the compression of BPE.
 
 |          | Taylor Swift's article (185KB)| Wikitext-103 (1MB) | Linux source code (1MB)|
 |----------|--------------|---------------------|------------------------|
 | ILP      |     | tr: 47.3%, lower-bound: 46.8%  |       |
-| Greedy   | tr: 44.8%   | tr: 47.2%, enc: 48.4%   | tr: 56.6%, enc: 61.9%|
-| BPE      | tr: 47.1%   | tr: 48.3%, enc: 49.0%   | tr: 59.9%, enc: 63.6%     |
+| Greedy   | tr: 44.8%   | tr: 47.2%, tst: 48.4%   | tr: 56.6%, tst: 61.9%|
+| BPE      | tr: 47.1%   | tr: 48.3%, tst: 49.0%   | tr: 59.9%, tst: 63.6% |
+| BPE (optimal dec.)     | tr: 46.9% | tr:48.2%, tst: 48.7% | tr: 59.6%, tst: 63.4% |
 
-The runtime comparison is shown below. We see that the Greedy Tokenizer has about the same speed as BPE, but is slower than the boosted BPE.
+The runtime comparison is shown below. We see that the Greedy Tokenizer has about the same speed as BPE, but is slower than the boosted BPE. They are run on a CPU with 4 hard cores (8 soft). ILp is run on 48 cores.
 
 |          | Taylor Swift's article (185KB)| Wikitext-103 (1MB) | Linux source code (1MB)|
 |----------|--------------|---------------------|------------------------|
 | ILP      | _  | < 30m   | _ |
-| Greedy   | tr: 10.93s  | tr: 52.39s, enc: 1.33s  | tr: 11.96s, enc: 1.48s |
-| BPE (unique chunks) | tr: 3.22s, enc: 0.11s   | tr: 10.61s,  enc: 0.40s  | tr: 7.45s,  enc: 0.27s |
-| BPE (original)| tr: 18.55s, enc: 0.31s    | tr: 81:80s, enc: 1:64s   | tr: 100.91s, enc: 1.25s |
+| Greedy   | tr: 10.93s  | tr: 52.39s, tst: 1.33s  | tr: 11.96s, tst: 1.48s |
+| BPE (unique chunks) | tr: 3.22s, tst: 0.11s   | tr: 10.61s,  tst: 0.40s  | tr: 7.45s,  tst: 0.27s |
+| BPE (unique chunks, optimal dec.)| tr: 3.20s, tst: 0.11s | tr: 11.69s, tst: 0.35s | tr: 8:04s, tst:0.30s |
+| BPE (original)| tr: 18.55s, tst: 0.31s    | tr: 81:80s, tst: 1:64s   | tr: 100.91s, tst: 1.25s |
 
 ---
 This code is a fork of Karpathy's [minbpe](https://github.com/karpathy/minbpe). See that repo for more background and an excellent lecture.
@@ -55,16 +65,15 @@ The files of the repo are as follows:
 
 1. [minbpe/greedy.py](minbpe/greedy.py): Implements the `GreedyTokenizer` class, which is a subclass of `RegexTokenizer`.
 2. [minbpe/ilp.py](minbpe/ilp.py): Implements the `ILPTokenizer` class, which is a subclass of `RegexTokenizer`.
-3. [minbpe/regex.py](minbpe/regex.py): Implements the `RegexTokenizer`, the boosted version of the the BPE algorithm.
+3. [minbpe/regex.py](minbpe/regex.py): improves the `RegexTokenizer`, with Optimal Chunk Tokenization and keeping just the unique chunks.
 
-Finally, the script [train.py](train.py) trains the three tokenizers and saves the vocab to disk for visualization. The training text can be selected to be [tests/taylorswift.txt](tests/taylorswift.txt) (this is the Wikipedia entry for her), or [tests/wikitext_103.txt](tests/wikitext_103.txt) (a collection of Wikipedia articles), or [tests/linux-kernel.txt](tests/linux-kernel.txt) (linux kernel source files).
+Finally, the script [train.py](train.py) trains the three tokenizers and saves the vocab to disk for visualization. The training text can be selected to be [tests/taylorswift.txt](tests/taylorswift.txt) (this is the Wikipedia entry for her), or [tests/wikitext_103.txt](tests/wikitext_103.txt) (a collection of Wikipedia articles), or [tests/linux-kernel.txt](tests/linux-kernel.txt) (Linux kernel source files).
 
 All of the files above are very short and thoroughly commented, and also contain a usage example on the bottom of the file.
 
 ## Quick start
 ---
-
-As the simplest example, we can reproduce the [Wikipedia article on BPE](https://en.wikipedia.org/wiki/Byte_pair_encoding) as follows:
+As the simplest example, we can test the Greedy Tokenizer as follows:
 
 ```python
 from minbpe import GreedyTokenizer
@@ -80,15 +89,15 @@ tokenizer.save("toy")
 # writes two files: toy.model (for loading) and toy.vocab (for viewing)
 ```
 
-The tricky thing to note is that the GreedyTokenizer, like BPE always allocates the 256 individual bytes as tokens, and then adds new tokens from there (the vocab gets sorted at the end of training).
+The tricky thing to note is that the GreedyTokenizer, like BPE, always allocates the 256 individual bytes as tokens, and then adds new tokens from there (the vocab gets sorted at the end of training).
 
 
 ## Training
 ---
 
-Unlike tiktoken, this code allows you to train your own tokenizer.
+Unlike [tiktoken](https://github.com/openai/tiktoken), this code allows you to train your own tokenizer.
 
-Following along with what OpenAI did for their text tokenizer, it's a good idea to adopt their approach of using regex pattern to split the text by categories. The GPT-4 pattern is a default with the `GreedyTokenizer` and `RegexTokenizer`, so you'd simply do something like:
+Following along with what OpenAI did for their text tokenizer, it's a good idea to adopt their approach of using regex pattern to split the text by categories. The GPT-4 pattern is a default with the `GreedyTokenizer`, `ILPTokenizer` and `RegexTokenizer`, so you'd simply do something like:
 
 ```python
 from minbpe import GreedyTokenizer
