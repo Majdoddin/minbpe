@@ -4,7 +4,7 @@ The algorithm is "byte-level" because it runs on UTF-8 encoded strings.
 
 Note that every improvement in compression (number of tokens in the tokenization of a text) is important, as it directly translates to  LLM's throughput.
 
-AFAIK most research on LLM tokenization is focused on boosting the speed, so this work is somehow unique in (also) improving the compression.
+AFAIK most research on LLM tokenization is focused on boosting the speed, so this work is novel in (also) improving the compression.
 
 ### The Greedy tokenizer is almost optimal
 
