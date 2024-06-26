@@ -12,7 +12,7 @@ Selecting the optimal tokenization vocabulary for a given training text, can be 
 
 To measure the the compression efficiency of the Greedy Tokenizer, I have implemented an ILP Tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turns out that the Greedy Tokenizer is within 1% of the optimal solution.
 
-The ILP Tokenizer can be used as an independent tokenizer, although it takes longer to train (within 1-2% of optimal solution on 1MB training text takes ~15 min. on 48 CPU cores). If you have already a vocabulary, you can warm-start the ILP Tokenizer with you vocab, to see how optimal it is, and to optimize it further.
+The ILP Tokenizer can be used as an independent tokenizer, although it takes longer to train (within 1-2% of optimal solution on 1MB training text takes ~15 min. on 48 CPU cores). If you have already a vocabulary, you can warm-start the ILP Tokenizer with your vocab, to see how optimal it is, and to optimize it further.
 
 ### What is the problem with BPE?
 The purpose of tokenization is to compress the text, so the LLM can be fed with larger texts. But how good is BPE in compressing?
