@@ -6,7 +6,8 @@ Note that every improvement in compression (number of tokens in the tokenization
 
 AFAIK most research on LLM tokenization is focused on boosting the speed, so this work is somehow unique in (also) improving the compression.
 
-**The Greedy tokenizer is near optimal**
+### The Greedy tokenizer is almost optimal
+
 Selecting the optimal tokenization vocabulary for a given training text, can be modelled as an Integer Linear Programming (ILP) problem, where the vocab tokens should give a minimal (in number of tokens) tokenization of the (chunks of the) training text.
 
 To measure the the compression efficiency of the Greedy Tokenizer, I have implemented an ILP Tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turns out that the Greedy Tokenizer is within 1% of the optimal solution.
@@ -20,21 +21,23 @@ To take a token in the vocab, not just its frequency, but also its length is imp
 
 BPE does subsequent merges of the most frequent pairs in the vocab. Now, suppose token "nevertheless" has a high (freq * length) in the training text, and BPE has done the merges th->X1, X1e->X2 and le->X3, but it does not merge X2X3, because "thele" is not frequent in the training text. So the following merges cannot result in token "nevertheless", just because some part of it is infrequent ☹️
 
-**How does the Greedy Tokenizer work?**
+
+### How does the Greedy Tokenizer work?
 After splitting the text using a regular expression into chunks, all the chunk substrings are taken as tokens. After an initial pruning of infrequent tokens, the vocab is initialized with all single byte tokens. Then iteratively, a token is added to the vocab, if it shortens the tokenization of the training text (with the current vocab) the most. And tokens are removed from vocab, if they do not contribute enough any more.
 
 This needs special data structures to run efficiently, and extra care should be given to avoid endless loops of additions/removals.
 
-**Keep just the unique chunks**
+### Keep just the unique chunks
 In long texts, the set of unique chunks is about 10% of the total number of chunks. Since identical chunks receive the same tokenization, we can boost speed by keeping just one instance of each identical chunk while noting its frequency. This does not affect the final vocabulary. This way, I have achieved a 10x speed-up in the runtime of both the BPE and Greedy Tokenizers.
 
-**Optimal chunk tokenization**
+### Optimal chunk tokenization
 Given the fixed vocabulary after training, a chunk of text can be tokenized in many ways. BPE apply merges to the chunk, similar to training (albeit only those in the vocab), to tokenize. But this is suboptimal. I replaced it with a dynamic programming algorithm, with guaranteed minimum number of tokens for a chunk. Without affecting the runtime, it improves the compression of BPE up to 0.3%.
 
 The same algorithm is used by the Greedy Tokenizer.
 
-**Comparison**
-The table below shows the compression rate of the three tokenizers, on training and test text. We define the compression rate as
+## Comparison
+
+The table below shows the compression rate of the three tokenizers, on training text and by tokenizing a test text. We define the compression rate as
 
 (number of tokens in the tokenization of the text) / (length of text in bytes).
 
