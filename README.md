@@ -6,18 +6,19 @@ Note that every improvement in compression (number of tokens in the tokenization
 
 AFAIK most research on LLM tokenization is focused on boosting the speed, so this work is somehow unique in (also) improving the compression.
 
-**The Greedy tokenizer is almost optimal**
+**The Greedy tokenizer is near optimal**
 Selecting the optimal tokenization vocabulary for a given training text, can be modelled as an Integer Linear Programming (ILP) problem, where the vocab tokens should give a minimal (in number of tokens) tokenization of the (chunks of the) training text.
 
 To measure the the compression efficiency of the Greedy Tokenizer, I have implemented an ILP Tokenizer using the CA-SAT solver of Google's or-tools. Surprisingly, it turns out that the Greedy Tokenizer is within 1% of the optimal solution.
 
-The ILP Tokenizer can be used as an independent tokenizer, although it takes longer to train (within 1-2% of optimal solution takes ~15 min. on 48 CPU cores).
+The ILP Tokenizer can be used as an independent tokenizer, although it takes longer to train (within 1-2% of optimal solution on 1MB training text takes ~15 min. on 48 CPU cores). If you have already a vocabulary, you can warm-start the ILP Tokenizer with you vocab, to see how optimal it is, and to optimize it further.
 
 **What is the problem with BPE?**
+The purpose of tokenization is to compress the text, so the LLM can be fed with larger texts. But how good is BPE in compressing?
+
 To take a token in the vocab, not just its frequency, but also its length is important. Because its contribution to the compression is freq * length.
 
 BPE does subsequent merges of the most frequent pairs in the vocab. Now, suppose token "nevertheless" has a high (freq * length) in the training text, and BPE has done the merges th->X1, X1e->X2 and le->X3, but it does not merge X2X3, because "thele" is not frequent in the training text. So the following merges cannot result in token "nevertheless", just because some part of it is infrequent ☹️
-
 
 **How does the Greedy Tokenizer work?**
 After splitting the text using a regular expression into chunks, all the chunk substrings are taken as tokens. After an initial pruning of infrequent tokens, the vocab is initialized with all single byte tokens. Then iteratively, a token is added to the vocab, if it shortens the tokenization of the training text (with the current vocab) the most. And tokens are removed from vocab, if they do not contribute enough any more.

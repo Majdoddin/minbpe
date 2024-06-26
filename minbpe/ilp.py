@@ -10,12 +10,16 @@ Models the training of a tokenizer as an Integer Linear Programming problem,
 and uses a SAT-solver to find an optimal solution to it. It is mathematically guaranteed that the tokenization of the training text with the resulting
 vocabulary has the minimum number of tokens, among all the vocabs of the same size.
 
-Also contains the load() and save() functions.
+Can do warmstart training by starting from a loaded vocab. Usefull to check how near optimal is a vocab, and to improve it.
 """
 
-class ILPTokenizer(RegexTokenizer, SaveLoad):
-    def train(self, text, vocab_size, verbose=False):
+class ILPTokenizer(SaveLoad, RegexTokenizer):
+    def train(self, text, vocab_size, warmstart = False, verbose=False):
+        """
+        If warmstart, the solver does warmstart from the already loaded vocab.
+        """
         assert vocab_size >= 256
+        assert (not warmstart) or self.vocab_rev != None
         # split the text up into text chunks
         text_chunks = re.findall(self.compiled_pattern, text)
 
@@ -39,11 +43,11 @@ class ILPTokenizer(RegexTokenizer, SaveLoad):
 
         # pruning any token that has same freq as one of its supertokens
         toremove = set()
-        for token in alltoks:
-            for start in range(len(token)):
-                for end in range(start + 1, len(token) + 1):
-                    if token[start:end] != token and alltoks[token[start:end]] == alltoks[token]:
-                        toremove.add(token[start:end])
+        for tkn in alltoks:
+            for start in range(len(tkn)):
+                for end in range(start + 1, len(tkn) + 1):
+                    if tkn[start:end] != tkn and alltoks[tkn[start:end]] == alltoks[tkn]:
+                        toremove.add(tkn[start:end])
 
         # pruning tokens that have small frequency
         # The constant is emperical, b'over' occured just 13 times in tokenizaton of talor swirt wiki article
@@ -52,9 +56,11 @@ class ILPTokenizer(RegexTokenizer, SaveLoad):
                 if alltoks[tkn] <= 3 * len(text) / 180000:
                     toremove.add(tkn)
 
-        for token in toremove:
-            if len(token) > 1:
-                del alltoks[token]
+        for tkn in toremove:
+            if len(tkn) > 1:
+                if warmstart and (tkn in self.vocab_rev):
+                    continue
+                del alltoks[tkn]
         # we do not need the values any more
         alltoks = set(alltoks.keys())
 
@@ -71,22 +77,33 @@ class ILPTokenizer(RegexTokenizer, SaveLoad):
 
         x, y = {}, {}
 
-        # Define variables
+        # Define variables. set initial value if warmstart
         for tok in alltoks:
             if len(tok) > 1:
                 x[tok]= model.new_bool_var(f"{tok}")
+                if warmstart:
+                    model.add_hint(x[tok], 1 if tok in self.vocab_rev else 0)
         for (chunk, start), tokens in P.items():
-            for token in tokens:
-                y[chunk, token, start] = model.new_bool_var(f"{chunk}_{token}_{start}")
+            for tkn in tokens:
+                y[chunk, tkn, start] = model.new_bool_var(f"{chunk}_{tkn}_{start}")
+                if warmstart:
+                    ts = self._encode_chunk(chunk)
+                    ts = [self.vocab[x] for x in ts]
+                    ts_start = 0
+                    for i, t in enumerate(ts):
+                        if ts_start >= start:
+                            break
+                        ts_start += len(t)
+                    model.add_hint(y[chunk, tkn, start], 1 if ts_start == start and ts[i] == tkn else 0)
 
         # Constraint: Exactly (vocab_size - 256) additional tokens must be selected
         model.add(sum(x[token] for token in alltoks if len(token) > 1) == (vocab_size - 256))
 
         # Constraint: only selected tokens may be used in tokenization of chunks
         for (chunk, start), tokens in P.items():
-            for token in tokens:
-                if len(token) > 1:
-                    model.add(y[chunk, token, start] <= x[token])
+            for tkn in tokens:
+                if len(tkn) > 1:
+                    model.add(y[chunk, tkn, start] <= x[tkn])
 
         # Constraint: Complete coverage and non-overlapping
         for chunk in ids:
@@ -105,6 +122,7 @@ class ILPTokenizer(RegexTokenizer, SaveLoad):
         solver.parameters.log_search_progress = True
         solver.parameters.symmetry_level = 3
         solver.parameters.num_search_workers = 7
+        solver.fix_variables_to_their_hinted_value = True
         status = solver.solve(model)
 
         if status == cp_model.OPTIMAL:

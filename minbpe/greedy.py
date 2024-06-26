@@ -10,7 +10,7 @@ A minimal Greedy Tokenizer. By taining, iteratively, a token is added to the voc
 if it shortens the tokenization of the training text (with the current vocab) the most.
 And tokens are removed from vocab, if they do not contribute enough any more.
 """
-class GreedyTokenizer(RegexTokenizer, SaveLoad):
+class GreedyTokenizer(SaveLoad, RegexTokenizer):
     def train(self, text, vocab_size, verbose=False):
         assert vocab_size >= 256
         # split the text up into text chunks
