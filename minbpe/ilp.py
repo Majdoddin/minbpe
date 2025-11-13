@@ -5,6 +5,7 @@ from .regex import RegexTokenizer
 from ortools.sat.python import cp_model
 import ast
 import os
+import psutil
 
 """
 Models the training of a tokenizer as an Integer Linear Programming problem,
@@ -38,24 +39,31 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         print(f"[ILP] Deduplication: {len(ids):,} unique chunks")
 
         # the key is a token (as bstring), the value is the number of times the token appears in the  tokenizatoin of text-chunks
-        alltoks = defaultdict(int)
-        alltoks.update({bytes([idx]):0  for idx in range(256)})
+        alltoks = {bytes([idx]):0  for idx in range(256)}
 
         # add each chunk and all its sublists to alltoks
-        print(f"[ILP] Generating candidate tokens...")
         for chunk in ids:
             for start in range(len(chunk)):
                 for end in range(start + 1, len(chunk) + 1):
-                    alltoks[chunk[start:end]] += ids[chunk]
+                    token = chunk[start:end]
+                    alltoks[token] = alltoks.get(token, 0) + ids[chunk]
         print(f"[ILP] Generated {len(alltoks):,} candidate tokens")
+
+        # If warmstart, ensure all vocab tokens are candidates
+        if warmstart:
+            for token in self.vocab_rev.keys():
+                if token not in alltoks:
+                    alltoks[token] = 0
+            print(f"[ILP] After adding warmstart vocab: {len(alltoks):,} candidate tokens")
 
         # pruning any token that has same freq as one of its supertokens
         toremove = set()
         for tkn in alltoks:
             for start in range(len(tkn)):
                 for end in range(start + 1, len(tkn) + 1):
-                    if tkn[start:end] != tkn and alltoks[tkn[start:end]] == alltoks[tkn]:
-                        toremove.add(tkn[start:end])
+                    subtoken = tkn[start:end]
+                    if subtoken != tkn and subtoken in alltoks and alltoks[subtoken] == alltoks[tkn]:
+                        toremove.add(subtoken)
 
         # pruning tokens that have small frequency
         # The constant is emperical, b'over' occured just 13 times in tokenizaton of talor swirt wiki article
@@ -167,10 +175,10 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         callback = SolutionCallback(self, x, y, ids, alltoks)
 
         solver = cp_model.CpSolver()
-        solver.parameters.log_search_progress = True
+        solver.parameters.log_search_progress = False
         solver.parameters.symmetry_level = 3
-        # Use all available CPU cores for parallel search
-        num_cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()
+        # Use all available physical CPU cores for parallel search
+        num_cores = psutil.cpu_count(logical=False)
         solver.parameters.num_search_workers = num_cores
         solver.fix_variables_to_their_hinted_value = True
         print(f"[ILP] Starting SAT solver with {num_cores} workers...")
@@ -185,4 +193,3 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
             self.vocab = {i:token for i, token in enumerate(self.vocab)}
             self.vocab_rev = {token:i for i, token in self.vocab.items()}
             print(f"Final tokenization length: {sum(solver.value(y[chunk, token, start]) * ids[chunk] for chunk, token, start in y)}")
-
