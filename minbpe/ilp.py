@@ -175,12 +175,12 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         callback = SolutionCallback(self, x, y, ids, alltoks)
 
         solver = cp_model.CpSolver()
-        solver.parameters.log_search_progress = False
+        solver.parameters.log_search_progress = True
         solver.parameters.symmetry_level = 3
         # Use all available physical CPU cores for parallel search
         num_cores = psutil.cpu_count(logical=False)
         solver.parameters.num_search_workers = num_cores
-        solver.fix_variables_to_their_hinted_value = True
+        solver.fix_variables_to_their_hinted_value = False
         print(f"[ILP] Starting SAT solver with {num_cores} workers...")
         status = solver.solve(model, callback)
 
