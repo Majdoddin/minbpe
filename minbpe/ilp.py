@@ -118,16 +118,56 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
                         for chunk, token, start in y]
         model.minimize(cp_model.LinearExpr.sum(objective))
 
+        # Solution callback to save intermediate results
+        class SolutionCallback(cp_model.CpSolverSolutionCallback):
+            def __init__(self, tokenizer, x_vars, y_vars, ids_dict, alltoks_set):
+                cp_model.CpSolverSolutionCallback.__init__(self)
+                self.tokenizer = tokenizer
+                self.x_vars = x_vars
+                self.y_vars = y_vars
+                self.ids_dict = ids_dict
+                self.alltoks_set = alltoks_set
+                self.solution_count = 0
+
+            def on_solution_callback(self):
+                self.solution_count += 1
+                # Build vocab from current solution
+                vocab = sorted([token for token in self.alltoks_set
+                               if len(token) == 1 or self.Value(self.x_vars[token]) == 1],
+                              key=lambda x: (len(x), x))
+                vocab_dict = {i: token for i, token in enumerate(vocab)}
+                vocab_rev = {token: i for i, token in vocab_dict.items()}
+
+                # Set it on tokenizer
+                self.tokenizer.vocab = vocab_dict
+                self.tokenizer.vocab_rev = vocab_rev
+
+                # Save checkpoint
+                import os
+                os.makedirs("out/ilp_checkpoints", exist_ok=True)
+                self.tokenizer.save(f"out/ilp_checkpoints/checkpoint_{self.solution_count}")
+
+                # Calculate objective value
+                obj_value = sum(self.Value(self.y_vars[chunk, token, start]) * self.ids_dict[chunk]
+                               for chunk, token, start in self.y_vars)
+                print(f"Solution {self.solution_count}: tokenization length = {obj_value}")
+
+        callback = SolutionCallback(self, x, y, ids, alltoks)
+
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True
         solver.parameters.symmetry_level = 3
         solver.parameters.num_search_workers = 7
         solver.fix_variables_to_their_hinted_value = True
-        status = solver.solve(model)
+        status = solver.solve(model, callback)
 
-        if status == cp_model.OPTIMAL:
+        print(f"\nSolver finished with status: {solver.status_name(status)}")
+        print(f"Total solutions found: {callback.solution_count}")
+
+        # Save final solution (OPTIMAL or best FEASIBLE found)
+        if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
             self.vocab = sorted([token for token in alltoks if len(token) == 1 or solver.value(x[token]) == 1], key=lambda x: (len(x), x))
             self.vocab = {i:token for i, token in enumerate(self.vocab)}
             self.vocab_rev = {token:i for i, token in self.vocab.items()}
-            print(f"Length of tokenization: {sum(solver.value(y[chunk, token, start]) * ids[chunk] for chunk, token, start in y)}")
+            print(f"Final tokenization length: {sum(solver.value(y[chunk, token, start]) * ids[chunk] for chunk, token, start in y)}")
 
