@@ -21,8 +21,12 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         """
         assert vocab_size >= 256
         assert (not warmstart) or self.vocab_rev != None
+
+        print(f"[ILP] Starting training: text_len={len(text):,} chars, vocab_size={vocab_size}")
+
         # split the text up into text chunks
         text_chunks = re.findall(self.compiled_pattern, text)
+        print(f"[ILP] Regex split: {len(text_chunks):,} chunks")
 
         # input text preprocessing
         ids = [ch.encode("utf-8") for ch in text_chunks]
@@ -31,16 +35,19 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         for byte_str in ids:
             tmp[byte_str] += 1
         ids = tmp
+        print(f"[ILP] Deduplication: {len(ids):,} unique chunks")
 
         # the key is a token (as bstring), the value is the number of times the token appears in the  tokenizatoin of text-chunks
         alltoks = defaultdict(int)
         alltoks.update({bytes([idx]):0  for idx in range(256)})
 
         # add each chunk and all its sublists to alltoks
+        print(f"[ILP] Generating candidate tokens...")
         for chunk in ids:
             for start in range(len(chunk)):
                 for end in range(start + 1, len(chunk) + 1):
                     alltoks[chunk[start:end]] += ids[chunk]
+        print(f"[ILP] Generated {len(alltoks):,} candidate tokens")
 
         # pruning any token that has same freq as one of its supertokens
         toremove = set()
@@ -64,6 +71,7 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
                 del alltoks[tkn]
         # we do not need the values any more
         alltoks = set(alltoks.keys())
+        print(f"[ILP] After pruning: {len(alltoks):,} tokens remain")
 
         # precompute positions where each token can appear in each chunk
         # get rid of substr
@@ -73,6 +81,7 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
                 for end in range(start + 1, len(chunk) + 1):
                     if chunk[start:end] in alltoks:
                         P[(chunk, start)].add(chunk[start:end])
+        print(f"[ILP] Position map: {len(P):,} entries")
 
         model = cp_model.CpModel()
 
@@ -96,6 +105,7 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
                             break
                         ts_start += len(t)
                     model.add_hint(y[chunk, tkn, start], 1 if ts_start == start and ts[i] == tkn else 0)
+        print(f"[ILP] Variables: x={len(x):,}, y={len(y):,}")
 
         # Constraint: Exactly (vocab_size - 256) additional tokens must be selected
         model.add(sum(x[token] for token in alltoks if len(token) > 1) == (vocab_size - 256))
@@ -113,6 +123,7 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
                                 for start in range(pos + 1)
                                 for token in P[(chunk, start)]
                                 if start + len(token) > pos)
+        print(f"[ILP] Model built: ready to solve")
 
         # Objective function: Minimize the total number of pairs (token, position) used
         objective = [cp_model.LinearExpr.term(y[chunk, token, start], ids[chunk])
@@ -162,6 +173,7 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         num_cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()
         solver.parameters.num_search_workers = num_cores
         solver.fix_variables_to_their_hinted_value = True
+        print(f"[ILP] Starting SAT solver with {num_cores} workers...")
         status = solver.solve(model, callback)
 
         print(f"\nSolver finished with status: {solver.status_name(status)}")
