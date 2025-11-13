@@ -4,6 +4,7 @@ from .base import SaveLoad
 from .regex import RegexTokenizer
 from ortools.sat.python import cp_model
 import ast
+import os
 
 """
 Models the training of a tokenizer as an Integer Linear Programming problem,
@@ -157,7 +158,9 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True
         solver.parameters.symmetry_level = 3
-        solver.parameters.num_search_workers = 7
+        # Use all available CPU cores for parallel search
+        num_cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()
+        solver.parameters.num_search_workers = num_cores
         solver.fix_variables_to_their_hinted_value = True
         status = solver.solve(model, callback)
 
