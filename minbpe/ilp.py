@@ -83,12 +83,14 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
 
         # precompute positions where each token can appear in each chunk
         # get rid of substr
-        P = defaultdict(set)
+        P = {}
         for chunk in ids:
             for start in range(len(chunk)):
+                tokens_at_pos = set()
                 for end in range(start + 1, len(chunk) + 1):
                     if chunk[start:end] in alltoks:
-                        P[(chunk, start)].add(chunk[start:end])
+                        tokens_at_pos.add(chunk[start:end])
+                P[(chunk, start)] = tuple(tokens_at_pos)
         print(f"[ILP] Position map: {len(P):,} entries")
 
         model = cp_model.CpModel()
@@ -101,36 +103,35 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
                 x[tok]= model.new_bool_var(f"{tok}")
                 if warmstart:
                     model.add_hint(x[tok], 1 if tok in self.vocab_rev else 0)
+
         for (chunk, start), tokens in P.items():
+            if warmstart:
+                ts = self._encode_chunk(chunk)
+                ts = [self.vocab[x] for x in ts]
+                ts_start = 0
+                for i, t in enumerate(ts):
+                    if ts_start >= start:
+                        break
+                    ts_start += len(t)
             for tkn in tokens:
                 y[chunk, tkn, start] = model.new_bool_var(f"{chunk}_{tkn}_{start}")
+                # Constraint: only selected tokens may be used in tokenization of chunks
+                if len(tkn) > 1:
+                    model.add(y[chunk, tkn, start] <= x[tkn])
                 if warmstart:
-                    ts = self._encode_chunk(chunk)
-                    ts = [self.vocab[x] for x in ts]
-                    ts_start = 0
-                    for i, t in enumerate(ts):
-                        if ts_start >= start:
-                            break
-                        ts_start += len(t)
                     model.add_hint(y[chunk, tkn, start], 1 if ts_start == start and ts[i] == tkn else 0)
         print(f"[ILP] Variables: x={len(x):,}, y={len(y):,}")
 
         # Constraint: Exactly (vocab_size - 256) additional tokens must be selected
         model.add(sum(x[token] for token in alltoks if len(token) > 1) == (vocab_size - 256))
 
-        # Constraint: only selected tokens may be used in tokenization of chunks
-        for (chunk, start), tokens in P.items():
-            for tkn in tokens:
-                if len(tkn) > 1:
-                    model.add(y[chunk, tkn, start] <= x[tkn])
-
         # Constraint: Complete coverage and non-overlapping
         for chunk in ids:
             for pos in range(len(chunk)):
                 model.add_exactly_one(y[chunk, token, start]
                                 for start in range(pos + 1)
-                                for token in P[(chunk, start)]
-                                if start + len(token) > pos)
+                                    for token in P[(chunk, start)]
+                                        if start + len(token) > pos)
         print(f"[ILP] Model built: ready to solve")
 
         # Objective function: Minimize the total number of pairs (token, position) used

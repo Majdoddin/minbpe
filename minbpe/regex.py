@@ -10,6 +10,7 @@ Unlike BasicTokenizer:
 """
 
 import regex as re
+from functools import lru_cache
 from .base import Tokenizer, get_stats, merge
 
 
@@ -99,6 +100,7 @@ class RegexTokenizer(Tokenizer):
         text = text_bytes.decode("utf-8", errors="replace")
         return text
 
+    @lru_cache(maxsize=3_000_000)
     def _encode_chunk(self, text_bytes, vocab=None):
         # returns a guaranteed optimal (least number of tokens) tokenizaton of text_bytes, given the vocab
         # uses dynamic programming
