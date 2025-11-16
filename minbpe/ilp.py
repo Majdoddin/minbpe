@@ -42,11 +42,12 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
         alltoks = {bytes([idx]):0  for idx in range(256)}
 
         # add each chunk and all its sublists to alltoks
-        for chunk in ids:
+        get_alltoks = alltoks.get
+        for chunk, freq in ids.items():
             for start in range(len(chunk)):
                 for end in range(start + 1, len(chunk) + 1):
                     token = chunk[start:end]
-                    alltoks[token] = alltoks.get(token, 0) + ids[chunk]
+                    alltoks[token] = get_alltoks(token, 0) + freq
         print(f"[ILP] Generated {len(alltoks):,} candidate tokens")
 
         # If warmstart, ensure all vocab tokens are candidates
@@ -103,7 +104,7 @@ class ILPTokenizer(SaveLoad, RegexTokenizer):
                 x[tok]= model.new_bool_var(f"{tok}")
                 if warmstart:
                     model.add_hint(x[tok], 1 if tok in self.vocab_rev else 0)
-
+        
         for (chunk, start), tokens in P.items():
             if warmstart:
                 ts = self._encode_chunk(chunk)
